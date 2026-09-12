@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="NetSentient autonomous semantic routing dashboard">
+  <title>NetSentient | Network Intelligence</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand"><div class="brand-mark"><span></span><span></span><span></span></div><div><strong>NetSentient</strong><small>Semantic Network Control</small></div></div>
+      <nav><a class="active" href="#overview">Overview</a><a href="#traffic">Traffic</a><a href="#semantic">Semantic AI</a><a href="#comparison">Routing Lab</a><a href="#events">Event Stream</a></nav>
+      <div class="sidebar-card"><div class="eyebrow">SYSTEM</div><div class="status-row"><span class="dot" id="healthDot"></span><span id="healthText">Connecting…</span></div><div class="mini"><span>API</span><b id="apiVersion">—</b></div></div>
+      <div class="sidebar-footer">Code2Create 7.0<br><span>Network intelligence prototype</span></div>
+    </aside>
+    <main class="content">
+      <header class="topbar"><div><div class="eyebrow">LIVE CONTROL CENTER</div><h1>Network Intelligence Dashboard</h1><p>See how semantic priority protects critical traffic under congestion.</p></div><div class="top-actions"><button class="btn ghost" id="resetBtn">Reset</button><button class="btn primary" id="demoBtn">Run Demo</button></div></header>
+      <section id="overview" class="hero-grid">
+        <div class="hero-card"><div class="hero-copy"><div class="eyebrow">AUTONOMOUS ROUTING</div><h2>Protect what matters.<br><em>Throttle what can wait.</em></h2><p>NetSentient reads payload meaning, scores urgency, and dynamically protects high-value traffic when capacity is constrained.</p><div class="hero-controls"><button class="toggle" id="congestionToggle"><span></span> Congestion <b>OFF</b></button><button class="toggle ai" id="semanticToggle"><span></span> Semantic routing <b>ON</b></button></div></div><div class="network-orbit"><div class="orbit-ring ring-a"></div><div class="orbit-ring ring-b"></div><div class="node core">AI</div><div class="node n1">SOS</div><div class="node n2">IoT</div><div class="node n3">VIDEO</div><div class="node n4">DATA</div></div></div>
+        <div class="stat-card accent"><span>NETWORK LOAD</span><strong id="loadValue">—</strong><small id="bandwidthValue">— Mbps available</small><div class="meter"><i id="loadMeter"></i></div></div>
+        <div class="stat-card"><span>ACTIVE FLOWS</span><strong id="flowsValue">0</strong><small>semantic traffic streams</small><div class="spark"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></div>
+      </section>
+      <section id="traffic" class="section"><div class="section-head"><div><div class="eyebrow">TRAFFIC PRIORITY</div><h2>Active flows</h2></div><button class="btn small" id="seedBtn">Load 40 demo flows</button></div><div class="traffic-grid" id="trafficGrid"></div></section>
+      <section class="section chart-panel"><div class="section-head"><div><div class="eyebrow">LIVE TELEMETRY</div><h2>Traffic distribution</h2><p class="muted">Throughput by semantic traffic tier.</p></div></div><div class="chart-wrap"><canvas id="trafficChart"></canvas></div></section>
+      <section class="section throughput-panel"><div class="section-head"><div><div class="eyebrow">DEMO THROUGHPUT SPLIT</div><h2>What semantic routing protects</h2><p class="muted">Per-tier Mbps across all three network states. Load demo traffic to populate this table.</p></div></div><div id="throughputComparison" class="throughput-grid"><p class="muted">Awaiting demo traffic…</p></div></section>
+      <section id="semantic" class="section two-col">
+        <div class="panel ai-panel"><div class="panel-head"><div><div class="eyebrow">LAYER 7 INTELLIGENCE</div><h2>Semantic classifier</h2></div><span class="live-badge">LIVE</span></div><p class="muted">Send a payload and let NetSentient decide how urgently it should move through the network.</p><textarea id="payloadInput" maxlength="4000" placeholder="e.g. ICU oxygen level has fallen to critical levels"></textarea><div class="quick-picks"><button data-payload="Emergency evacuation alert issued for Sector 7">Emergency alert</button><button data-payload="ICU oxygen level has fallen to critical levels">Critical sensor</button><button data-payload="Live video communication between rescue teams">Video stream</button><button data-payload="Routine database backup is running">Background</button></div><button class="btn primary wide" id="classifyBtn">Analyze &amp; add flow <span>→</span></button><p id="classifierStatus" class="form-status" aria-live="polite">Your result will appear in the live traffic stream.</p><div class="classification" id="classification"><div class="class-icon">AI</div><div><span id="analysisProvider">SEMANTIC ANALYSIS</span><strong id="classCategory">Waiting for input</strong><small id="classReason">Classification results will appear here.</small></div><b id="classPriority">—</b></div></div>
+        <div class="panel"><div class="panel-head"><div><div class="eyebrow">CRITICALITY SIGNAL</div><h2>Criticality score history</h2></div></div><p class="muted">Each analyzed flow is scored from 1 (least critical) to 10 (most critical).</p><div class="criticality-wrap"><canvas id="criticalityChart"></canvas></div><div class="latest-analysis"><span>LAST ANALYZED PAYLOAD</span><strong id="lastPayload">Waiting for network traffic…</strong><small id="lastReasoning">Submit a payload to see the classifier’s reasoning.</small></div></div>
+      </section>
+      <section id="comparison" class="section"><div class="section-head"><div><div class="eyebrow">PROOF OF IMPACT</div><h2>Routing lab</h2><p class="muted">Compare fair allocation against semantic routing during congestion.</p></div><button class="btn small" id="compareBtn">Compare modes</button></div><div class="compare-wrap"><div class="compare-card"><div class="compare-title"><span>BASELINE</span><b>Fair allocation</b></div><div id="baselineBars"></div></div><div class="vs">VS</div><div class="compare-card semantic-card"><div class="compare-title"><span>NETSENTIENT</span><b>Semantic routing</b></div><div id="semanticBars"></div></div></div><div class="impact" id="impactBox"><span>AVERAGE DELIVERY IMPROVEMENT</span><strong>—</strong><small>Run comparison to calculate the gain.</small></div></section>
+      <section id="events" class="section activity-section"><div class="section-head"><div><div class="eyebrow">OBSERVABILITY</div><h2>Event stream</h2></div></div><div class="events" id="eventLog"></div></section>
+      <footer>NetSentient · Autonomous Context-Aware Traffic Management · Prototype</footer>
+    </main>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>
