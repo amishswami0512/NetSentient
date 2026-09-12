@@ -77,6 +77,33 @@ btnQos.addEventListener('click', async () => {
     console.warn('Backend server not connected yet. Running in offline UI mode.');
   }
 });
+// --- AI Box Logic ---
+const aiPayloadText = document.getElementById('ai-payload-text');
+const aiTierBadge = document.getElementById('ai-tier-badge');
+const aiReasoningText = document.getElementById('ai-reasoning-text');
+
+function updateAIBox(payload, tier, reasoning) {
+    if (!payload) return; // safety check
+    aiPayloadText.textContent = `"${payload}"`;
+    aiReasoningText.textContent = reasoning;
+    
+    if (tier === 1) {
+        aiTierBadge.className = 'px-4 py-1 rounded-full bg-red-600 text-white font-bold text-lg shadow-[0_0_15px_rgba(220,38,38,0.6)] animate-pulse';
+        aiTierBadge.textContent = 'Tier 1 (Emergency)';
+    } else if (tier === 2) {
+        aiTierBadge.className = 'px-4 py-1 rounded-full bg-amber-500 text-slate-900 font-bold text-lg';
+        aiTierBadge.textContent = 'Tier 2 (Sensor)';
+    } else if (tier === 3) {
+        aiTierBadge.className = 'px-4 py-1 rounded-full bg-blue-500 text-white font-bold text-lg';
+        aiTierBadge.textContent = 'Tier 3 (Video)';
+    } else {
+        aiTierBadge.className = 'px-4 py-1 rounded-full bg-slate-600 text-white font-bold text-lg';
+        aiTierBadge.textContent = 'Tier 4 (Bulk)';
+    }
+}
+// --------------------
+
+
 
 // Live Metrics Fetcher
 async function fetchMetrics() {
@@ -85,6 +112,7 @@ async function fetchMetrics() {
     const data = await res.json();
     
     updateUI(data.emergency || 0, data.sensor || 0, data.video || 0, data.file || 0);
+    if (data.payload) updateAIBox(data.payload, data.tier, data.reasoning);
   } catch (err) {
     // Fallback dummy data generation if backend isn't running yet
     const timeNow = new Date().toLocaleTimeString();
