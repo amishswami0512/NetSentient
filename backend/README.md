@@ -74,7 +74,8 @@ The semantic → priority pipeline, end to end:
 
 ```
 traffic text
-  -> payload cache (instant on repeat input)
+  -> payload cache (instant on repeat input, any source)
+  -> curated common-word fast path (instant, skips Gemini entirely)  [services/semantic_service.py: _COMMON_KEYWORD_SEED]
   -> Gemini semantic analysis (services/gemini_service.py)          [structured JSON, timeout-bounded]
   -> independent validation (services/semantic_service.py)          [Gemini output is untrusted]
   -> deterministic fallback if Gemini unavailable/invalid/timed out [services/classifier_service.py + config.FALLBACK_SEMANTIC_FACTORS]
@@ -146,7 +147,7 @@ All responses are JSON. All errors follow this shape:
 | GET | `/api/network/status` | Current simulated network state | — | `{"congestion":bool,"load_percent":int,"bandwidth_mbps":float,"semantic_routing_enabled":bool,"active_connections":int,"timestamp":str}` |
 | GET | `/api/traffic` | List active traffic with live metrics | — | `{"traffic":[{...}]}` |
 | POST | `/api/traffic` | Create a traffic flow | `{"type":"emergency","label":"optional"}` | `201` created traffic item incl. metrics |
-| POST | `/api/classify` | Semantic analysis + priority for free-text input | `{"input":"some text"}` | `{"category":str,"confidence":float,"priority":float,"priority_factors":{...},"low_confidence":bool,"source":"gemini"\|"fallback","reason":str}` |
+| POST | `/api/classify` | Semantic analysis + priority for free-text input | `{"input":"some text"}` | `{"category":str,"confidence":float,"priority":float,"priority_factors":{...},"low_confidence":bool,"source":"gemini"\|"keyword"\|"fallback","reason":str}` |
 | POST | `/api/simulation/congestion` | Toggle congestion | `{"enabled":bool}` | `{"congestion":bool,"load_percent":int,"bandwidth_mbps":float}` |
 | POST | `/api/simulation/semantic-routing` | Toggle semantic routing | `{"enabled":bool}` | `{"semantic_routing_enabled":bool}` |
 | POST | `/api/simulation/run` | Run one deterministic simulation step | — | `{"simulation_id":str,"network":{...},"results":[{...}]}` |
@@ -234,6 +235,24 @@ Extracted per traffic description by `services/semantic_service.py`
 | `consequence` | How bad is it if this is delayed or dropped? |
 | `latency_sensitivity` | Does this need near-real-time delivery? |
 | `reliability_requirement` | How important is guaranteed successful delivery? |
+
+### Keyword fast path (cost/latency optimization)
+
+Not every input needs a full Gemini call. `services/semantic_service.py`
+keeps a small curated dictionary of common short words/phrases
+(`_COMMON_KEYWORD_SEED`: "emergency", "software update", "video call",
+etc.) that resolve instantly with `"source": "keyword"`, skipping
+Gemini entirely.
+
+This is deliberately a **curated list**, not "skip Gemini whenever any
+keyword matches" — a broad keyword trigger would defeat the point of
+Gemini for realistic input. "Routine temperature reading" and
+"temperature exceeded dangerous threshold" both contain "temperature",
+but only real semantic analysis can tell them apart; fast-pathing on
+keyword presence alone would silently lose exactly the context-awareness
+this whole engine exists to provide. Only genuinely unambiguous short
+terms are in the seed list — anything more descriptive still goes to
+Gemini (or the deterministic fallback if Gemini isn't available).
 
 ### The formula (`services/priority_service.py`, weights in `config.PRIORITY_WEIGHTS`)
 

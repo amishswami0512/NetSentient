@@ -129,10 +129,16 @@ async function classifyText(text) {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error?.message || 'Classification failed');
 
-    // Show the actual semantic analysis (Gemini's own reasoning, or the
-    // deterministic fallback's) rather than a generic client-built string
-    // -- this is the whole point of the semantic priority engine.
-    const sourceNote = data.source === 'gemini' ? 'Gemini' : 'fallback (no Gemini key configured)';
+    // Show the actual semantic analysis (Gemini's own reasoning, the
+    // curated keyword fast-path, or the deterministic fallback's) rather
+    // than a generic client-built string -- this is the whole point of
+    // the semantic priority engine.
+    const SOURCE_NOTES = {
+      gemini: 'Gemini',
+      keyword: 'common-word fast path (Gemini skipped for speed)',
+      fallback: 'fallback (Gemini unavailable or no key configured)',
+    };
+    const sourceNote = SOURCE_NOTES[data.source] || data.source;
     const confidenceNote = data.low_confidence ? ' -- low confidence, priority capped conservatively' : '';
     const reasoning = `${data.reason} [priority ${data.priority}/10 via ${sourceNote}, confidence ${Math.round(data.confidence * 100)}%${confidenceNote}]`;
     updateAIBox(text, data.category, reasoning);

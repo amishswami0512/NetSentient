@@ -1,4 +1,4 @@
-"""Semantic traffic analysis: cache -> Gemini -> deterministic fallback.
+"""Semantic traffic analysis: keyword fast-path -> Gemini -> deterministic fallback.
 
 This is the only module the rest of the backend should call for
 semantic analysis (routes/classify.py, services/state_service.py).
@@ -6,7 +6,8 @@ It never lets a Gemini failure propagate: every call returns a fully
 valid result, explicitly marked with where it came from.
 
     TRAFFIC TEXT
-      -> payload cache (instant repeat lookups)
+      -> payload cache (instant repeat lookups, any source)
+      -> curated common-word fast path (instant, skips Gemini entirely)
       -> Gemini (services/gemini_service.py) if configured
       -> independent validation of Gemini's output (untrusted input)
       -> deterministic fallback (services/classifier_service.py's
@@ -14,8 +15,21 @@ valid result, explicitly marked with where it came from.
          Gemini is unavailable, times out, or returns anything invalid
       -> {category, confidence, factors, reason, source}
 
+`source` is one of:
+  - "keyword"  matched a curated common word/phrase, Gemini not called
+  - "gemini"   real semantic analysis
+  - "fallback" Gemini was unavailable or returned something invalid
+
 Gemini never decides priority or touches routing -- that happens in
 services/priority_service.py, one layer up.
+
+Why a curated list rather than "skip Gemini if any keyword matches":
+a broad keyword trigger would defeat the point of Gemini for realistic
+input -- "routine temperature reading" contains the same keyword
+("temperature") as "temperature exceeded dangerous threshold" but needs
+real context to tell them apart. Only short, genuinely unambiguous
+common words/phrases are fast-pathed; anything more descriptive still
+goes to Gemini.
 """
 import logging
 from typing import Any
@@ -31,6 +45,54 @@ _cache = PayloadCache()
 _fallback_classifier = RuleBasedClassifier()
 
 _FACTOR_KEYS = ("urgency", "consequence", "latency_sensitivity", "reliability_requirement")
+
+# Common short words/phrases that skip Gemini entirely -- instant,
+# free, and correct enough for genuinely unambiguous input. Each maps
+# to a category; confidence and factors reuse the same typical-value
+# table as the deterministic fallback (config.FALLBACK_SEMANTIC_FACTORS),
+# since a bare common word carries no more context than the category
+# itself does.
+_COMMON_KEYWORD_SEED: dict[str, str] = {
+    "emergency": "emergency",
+    "emergency alert": "emergency",
+    "sos": "emergency",
+    "fire": "emergency",
+    "evacuation": "emergency",
+    "ambulance": "emergency",
+    "critical sensor": "critical_sensor",
+    "sensor alert": "critical_sensor",
+    "heart rate monitor": "critical_sensor",
+    "real time control": "real_time",
+    "real-time control": "real_time",
+    "live monitoring": "real_time",
+    "video call": "video",
+    "video conference": "video",
+    "voice call": "video",
+    "file transfer": "file",
+    "download": "file",
+    "upload": "file",
+    "software update": "background",
+    "background sync": "background",
+    "backup": "background",
+    "cloud sync": "background",
+}
+
+
+def _seed_common_keywords() -> None:
+    for phrase, category in _COMMON_KEYWORD_SEED.items():
+        _cache.put(
+            phrase,
+            {
+                "category": category,
+                "confidence": 0.95,
+                "factors": dict(FALLBACK_SEMANTIC_FACTORS[category]),
+                "reason": f"Recognized as a common '{category}' term -- Gemini not needed.",
+                "source": "keyword",
+            },
+        )
+
+
+_seed_common_keywords()
 
 # Client resolution state. "unset" means "not yet resolved from
 # Config.GEMINI_API_KEY"; set_client() (used by tests, or to swap
@@ -50,6 +112,7 @@ def set_client(client: Any) -> None:
     _client = client
     _client_resolved = True
     _cache.clear()
+    _seed_common_keywords()
 
 
 def reset_client_resolution() -> None:
@@ -61,6 +124,7 @@ def reset_client_resolution() -> None:
     _client = None
     _client_resolved = False
     _cache.clear()
+    _seed_common_keywords()
 
 
 def _get_client() -> Any:

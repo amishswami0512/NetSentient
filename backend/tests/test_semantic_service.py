@@ -128,3 +128,50 @@ def test_fallback_never_crashes_on_empty_or_unusual_input():
             assert 0.0 <= result["confidence"] <= 1.0
     finally:
         _restore()
+
+
+def test_common_keyword_never_calls_gemini_even_when_configured():
+    client = _client_for(_analysis(category="video"))  # would return "video" if called
+    semantic_service.set_client(client)
+    try:
+        result = semantic_service.analyze("Software Update")
+        assert result["source"] == "keyword"
+        assert result["category"] == "background"
+        assert client.models.call_count == 0
+    finally:
+        _restore()
+
+
+def test_common_keyword_case_and_whitespace_insensitive():
+    semantic_service.set_client(None)
+    try:
+        result = semantic_service.analyze("  EMERGENCY   ALERT  ")
+        assert result["source"] == "keyword"
+        assert result["category"] == "emergency"
+    finally:
+        _restore()
+
+
+def test_descriptive_sentence_with_a_keyword_word_still_uses_gemini():
+    # "temperature" alone is fast-pathed nowhere in our seed list, and a
+    # full descriptive sentence should still go to Gemini for real
+    # context -- the fast path must not swallow nuanced input just
+    # because it shares a word with a common term.
+    client = _client_for(_analysis(category="critical_sensor", urgency=0.95, consequence=0.97))
+    semantic_service.set_client(client)
+    try:
+        result = semantic_service.analyze("Factory temperature sensor reports dangerous overheating")
+        assert result["source"] == "gemini"
+        assert client.models.call_count == 1
+    finally:
+        _restore()
+
+
+def test_switching_client_keeps_common_keyword_seed_available():
+    semantic_service.set_client(_client_for(_analysis(category="video")))
+    try:
+        result = semantic_service.analyze("Emergency Alert")
+        assert result["source"] == "keyword"
+        assert result["category"] == "emergency"
+    finally:
+        _restore()
