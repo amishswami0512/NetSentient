@@ -234,6 +234,18 @@ To plug in a real model, implement `BaseClassifier.classify(text) ->
 to change, and the response shape (`category`/`confidence`/`priority`)
 stays the same.
 
+A real implementation is already wired in: `GeminiClassifier` calls
+Google's Gemini API (ported from the "HackyWacky" prototype) and maps
+its 4 severity tiers onto our 5 categories. It activates automatically
+when `GEMINI_API_KEY` is set in `.env` — with no key, `POST
+/api/classify` keeps using the deterministic `RuleBasedClassifier`, so
+nothing breaks if the key isn't configured. It also falls back to
+`RuleBasedClassifier` on any Gemini API error (bad key, rate limit,
+network issue, malformed response), so a live demo never crashes
+because of an external API hiccup. Set `model="..."` in the
+`GeminiClassifier(client, model=...)` call in `_build_default_classifier()`
+if you want a different Gemini model.
+
 **Networking/simulation teammate:** `services/routing_service.py` is
 where congestion behavior is computed (`compute_metrics`). The
 simulation is intentionally deterministic (no `random` calls) so a live
