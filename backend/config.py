@@ -157,3 +157,13 @@ class Config:
     # lower default here would make every real Gemini call fail
     # outright, regardless of how valid the API key is.
     GEMINI_TIMEOUT_SECONDS = float(os.environ.get("GEMINI_TIMEOUT_SECONDS", "12.0"))
+
+    # Where active traffic / congestion / routing state is persisted to
+    # disk (see services/state_service.py), so restarting Flask no
+    # longer wipes it -- only an explicit reset does. Defaults to a
+    # path next to this file so it resolves correctly regardless of
+    # the process's current working directory.
+    STATE_FILE_PATH = os.environ.get(
+        "STATE_FILE_PATH",
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "state.json"),
+    )
