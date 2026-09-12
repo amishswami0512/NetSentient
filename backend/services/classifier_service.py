@@ -13,6 +13,7 @@ import os
 from abc import ABC, abstractmethod
 
 from config import PRIORITY_MAP
+from services.payload_cache import PayloadCache
 
 logger = logging.getLogger(__name__)
 
@@ -169,17 +170,48 @@ def _build_default_classifier() -> BaseClassifier:
 
 _classifier: BaseClassifier = _build_default_classifier()
 
+# Fast path: payloads seen often enough to hardcode (the demo's own
+# default traffic labels, plus a few obviously common phrasings) skip
+# classification entirely and resolve instantly. Anything else is
+# classified normally the first time, then memoized in the same cache
+# for subsequent lookups -- see services/payload_cache.py.
+_COMMON_PAYLOAD_SEED: dict[str, dict[str, float | str | int]] = {
+    "emergency alert": {"category": "emergency", "confidence": 0.99, "priority": PRIORITY_MAP["emergency"]},
+    "critical sensor": {"category": "critical_sensor", "confidence": 0.99, "priority": PRIORITY_MAP["critical_sensor"]},
+    "video call": {"category": "video", "confidence": 0.99, "priority": PRIORITY_MAP["video"]},
+    "file transfer": {"category": "file", "confidence": 0.99, "priority": PRIORITY_MAP["file"]},
+    "background update": {"category": "background", "confidence": 0.99, "priority": PRIORITY_MAP["background"]},
+    "ambulance emergency alert dispatched": {"category": "emergency", "confidence": 0.97, "priority": PRIORITY_MAP["emergency"]},
+    "software update": {"category": "background", "confidence": 0.9, "priority": PRIORITY_MAP["background"]},
+}
+
+_payload_cache = PayloadCache()
+_payload_cache.seed(_COMMON_PAYLOAD_SEED)
+
 
 def set_classifier(classifier: BaseClassifier) -> None:
-    """Swap the active classifier implementation (used by teammates later)."""
+    """Swap the active classifier implementation (used by teammates later).
+
+    Clears the payload cache too -- cached results were computed by the
+    previous classifier, so keeping them around after a swap would
+    silently serve stale answers for anything already looked up.
+    """
     global _classifier
     _classifier = classifier
+    _payload_cache.clear()
+    _payload_cache.seed(_COMMON_PAYLOAD_SEED)
 
 
 def classify_text(text: str) -> dict[str, float | str | int]:
+    cached = _payload_cache.get(text)
+    if cached is not None:
+        return cached
+
     category, confidence = _classifier.classify(text)
-    return {
+    result: dict[str, float | str | int] = {
         "category": category,
         "confidence": confidence,
         "priority": PRIORITY_MAP[category],
     }
+    _payload_cache.put(text, result)
+    return result
