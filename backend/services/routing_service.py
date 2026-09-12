@@ -30,7 +30,7 @@ _NO_CONGESTION_BANDWIDTH_MBPS = 10.0
 _CONGESTION_BANDWIDTH_MBPS = 2.0
 
 
-def _interpolate_delivery(priority: int) -> float:
+def _interpolate_delivery(priority: float) -> float:
     anchors = _SEMANTIC_CONGESTED_ANCHORS
     if priority <= anchors[0][0]:
         return anchors[0][1]
@@ -44,9 +44,15 @@ def _interpolate_delivery(priority: int) -> float:
 
 
 def compute_metrics(
-    priority: int, congestion: bool, semantic_routing_enabled: bool
+    priority: float, congestion: bool, semantic_routing_enabled: bool
 ) -> dict[str, Any]:
-    """Compute latency/loss/delivery/status for one traffic item."""
+    """Compute latency/loss/delivery/status for one traffic item.
+
+    `priority` is continuous (0-10), not limited to a fixed set of
+    values -- the anchor-based interpolation and linear formulas below
+    already work for any priority in range, so no changes were needed
+    here to support the context-aware priority engine.
+    """
     if not congestion:
         delivery = round(99.5 - (MAX_PRIORITY - priority) * 0.3, 2)
         status = "normal"

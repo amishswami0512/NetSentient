@@ -10,7 +10,7 @@ clean slate without restarting the server.
 """
 from typing import Any
 
-from config import PRIORITY_MAP
+from services import priority_service, semantic_service
 
 
 class StateService:
@@ -30,13 +30,30 @@ class StateService:
 
     # -- traffic -----------------------------------------------------
     def add_traffic(self, traffic_type: str, label: str) -> dict[str, Any]:
+        """Create a traffic item, with priority computed from the label's
+        actual semantic content (not just a flat per-type lookup).
+
+        `traffic_type` (client-declared, already validated against
+        SUPPORTED_TRAFFIC_TYPES) is used as the category for priority
+        safety-bounds purposes; the label text is what's semantically
+        analyzed (via Gemini, or the deterministic fallback) to get the
+        urgency/consequence/latency/reliability factors that actually
+        differentiate priority within that category.
+        """
         self._traffic_seq += 1
         traffic_id = f"traffic-{self._traffic_seq:03d}"
+
+        analysis = semantic_service.analyze_for_category(label, traffic_type)
+        scored = priority_service.score(traffic_type, analysis["confidence"], analysis["factors"])
+
         entry = {
             "id": traffic_id,
             "type": traffic_type,
             "label": label,
-            "priority": PRIORITY_MAP[traffic_type],
+            "priority": scored["priority"],
+            "priority_factors": analysis["factors"],
+            "low_confidence": scored["low_confidence"],
+            "source": analysis["source"],
         }
         self._traffic[traffic_id] = entry
         return entry

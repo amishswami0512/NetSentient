@@ -5,11 +5,21 @@ functions and serialize the result.
 """
 from typing import Any
 
-from config import DEFAULT_LABELS
 from services import routing_service
 from services.state_service import state
 
-DEMO_TRAFFIC_TYPES = ["emergency", "critical_sensor", "video", "file"]
+# (type, label) pairs for the standard demo scenario. Deliberately
+# descriptive rather than generic ("Factory temperature exceeded fire
+# safety threshold", not just "Critical Sensor") so the demo actually
+# exercises context-aware semantic analysis instead of just re-deriving
+# a flat per-type default.
+DEMO_SCENARIOS: list[tuple[str, str]] = [
+    ("emergency", "Ambulance emergency alert requiring immediate response"),
+    ("critical_sensor", "Factory temperature exceeded fire safety threshold"),
+    ("real_time", "Autonomous vehicle collision warning"),
+    ("video", "Normal live video conference"),
+    ("file", "Large operating system update download"),
+]
 
 
 def traffic_with_metrics() -> list[dict[str, Any]]:
@@ -52,8 +62,8 @@ def seed_demo_traffic() -> list[dict[str, Any]]:
     state.reset()
     state.set_semantic_routing(True)
     state.set_congestion(False)
-    for traffic_type in DEMO_TRAFFIC_TYPES:
-        state.add_traffic(traffic_type, DEFAULT_LABELS[traffic_type])
+    for traffic_type, label in DEMO_SCENARIOS:
+        state.add_traffic(traffic_type, label)
     return traffic_with_metrics()
 
 

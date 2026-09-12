@@ -54,8 +54,8 @@ def test_run_simulation_shape(client):
 
 
 def test_semantic_routing_changes_simulation_behavior_under_congestion(client):
-    client.post("/api/traffic", json={"type": "emergency"})
-    client.post("/api/traffic", json={"type": "file"})
+    emergency_id = client.post("/api/traffic", json={"type": "emergency"}).get_json()["id"]
+    file_id = client.post("/api/traffic", json={"type": "file"}).get_json()["id"]
     client.post("/api/simulation/congestion", json={"enabled": True})
 
     client.post("/api/simulation/semantic-routing", json={"enabled": True})
@@ -66,13 +66,13 @@ def test_semantic_routing_changes_simulation_behavior_under_congestion(client):
 
     assert with_semantic != without_semantic
 
-    emergency_with = next(r for r in with_semantic if r["priority"] == 10)
-    file_with = next(r for r in with_semantic if r["priority"] == 2)
+    emergency_with = next(r for r in with_semantic if r["traffic_id"] == emergency_id)
+    file_with = next(r for r in with_semantic if r["traffic_id"] == file_id)
     # With semantic routing on, high priority must clearly outperform low priority.
     assert emergency_with["delivery_percent"] > file_with["delivery_percent"]
 
-    emergency_without = next(r for r in without_semantic if r["priority"] == 10)
-    file_without = next(r for r in without_semantic if r["priority"] == 2)
+    emergency_without = next(r for r in without_semantic if r["traffic_id"] == emergency_id)
+    file_without = next(r for r in without_semantic if r["traffic_id"] == file_id)
     # Without semantic routing, congestion hits both roughly equally,
     # so the gap should be far smaller than with routing enabled.
     gap_with = emergency_with["delivery_percent"] - file_with["delivery_percent"]

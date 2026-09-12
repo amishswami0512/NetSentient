@@ -13,20 +13,26 @@ infrastructure. State is in-memory and resets when Flask restarts.
 ## 1. Project Overview
 
 - Frontend/dashboard team consumes this API over HTTP (JSON).
-- AI/classification teammate will eventually replace the temporary
-  rule-based classifier behind `POST /api/classify` (see
-  "How Teammates Should Integrate" below).
+- **Gemini provides semantic understanding; this backend decides the
+  final priority.** Traffic descriptions are analyzed by Google's
+  Gemini API for urgency/consequence/latency-sensitivity/reliability,
+  and a deterministic priority engine (not Gemini) converts that into
+  a final 0-10 priority. Gemini never touches routing directly — see
+  "Semantic Priority Engine" below.
 - Networking/simulation teammate drives congestion/simulation via
   `POST /api/simulation/*`.
-- Everything is deterministic — no random numbers — so the same
-  sequence of calls always produces the same demo results.
+- Everything downstream of semantic analysis is deterministic — no
+  random numbers — so the same sequence of calls always produces the
+  same demo results. Gemini itself is called with `temperature=0.1`
+  and a fixed `seed` to keep its output as stable as possible; the
+  cache (see below) makes repeat inputs exactly reproducible regardless.
 
 ## 2. Architecture
 
 ```
 backend/
 ├── app.py                       # Flask app factory, blueprint registration, error handlers
-├── config.py                    # Centralized config: priority map, CORS origins, limits
+├── config.py                    # Centralized config: priority weights, category bounds, CORS, limits
 ├── requirements.txt
 ├── .env.example
 ├── README.md
@@ -40,7 +46,11 @@ backend/
 │
 ├── services/                    # Business logic — no Flask imports here
 │   ├── state_service.py          In-memory state manager (traffic, congestion, routing flag)
-│   ├── classifier_service.py     Swappable classification abstraction
+│   ├── classifier_service.py     Deterministic keyword classifier (standalone + fallback's category detector)
+│   ├── gemini_service.py         Raw Gemini call: structured JSON output, timeout, never raises
+│   ├── semantic_service.py       Orchestrates: cache -> Gemini -> validation -> deterministic fallback
+│   ├── priority_service.py       Deterministic priority engine: weighted formula + category safety bounds
+│   ├── payload_cache.py          Generic LRU cache (fast-path for common/repeated payloads)
 │   ├── routing_service.py        Priority-aware latency/loss/delivery metrics
 │   └── simulation_service.py     Orchestrates state + routing into API-shaped results
 │
@@ -52,13 +62,33 @@ backend/
     ├── test_traffic.py
     ├── test_classify.py
     ├── test_simulation.py
-    └── test_demo.py
+    ├── test_demo.py
+    ├── test_payload_cache.py
+    ├── test_gemini_service.py
+    ├── test_semantic_service.py
+    ├── test_priority.py
+    └── test_fallback.py
+```
+
+The semantic → priority pipeline, end to end:
+
+```
+traffic text
+  -> payload cache (instant on repeat input)
+  -> Gemini semantic analysis (services/gemini_service.py)          [structured JSON, timeout-bounded]
+  -> independent validation (services/semantic_service.py)          [Gemini output is untrusted]
+  -> deterministic fallback if Gemini unavailable/invalid/timed out [services/classifier_service.py + config.FALLBACK_SEMANTIC_FACTORS]
+  -> {category, confidence, urgency, consequence, latency_sensitivity, reliability_requirement}
+  -> deterministic priority engine (services/priority_service.py)   [weighted formula + category safety bounds]
+  -> final priority (0-10, continuous)
+  -> network simulator (services/routing_service.py)                [Gemini never called here]
 ```
 
 Design rules followed throughout:
 - Routes never touch state directly or contain business logic — they
   call a service and serialize the result.
-- All priority numbers live in **one place**: `config.PRIORITY_MAP`.
+- Priority is **never** a flat function of category alone — see
+  section 7. All weights/bounds live in **one place**: `config.py`.
 - All mutable demo state lives in **one place**: `services.state_service.state`.
 
 ## 3. Installation
@@ -93,6 +123,9 @@ All optional — see `.env.example`. Copy it to `.env` to override defaults.
 | `FLASK_DEBUG` | `true` | Enables Flask debug/auto-reload |
 | `ALLOWED_ORIGINS` | `http://localhost:3000,http://localhost:5173` | Comma-separated CORS allow-list for the frontend |
 | `MAX_CONTENT_LENGTH_BYTES` | `65536` | Max accepted request body size |
+| `GEMINI_API_KEY` | *(empty)* | Optional. If set, `POST /api/classify` and traffic creation use real Gemini semantic analysis. If unset, the deterministic fallback is used and the app works identically otherwise. |
+| `GEMINI_MODEL` | `gemini-3.5-flash-lite` | Gemini model used for semantic analysis (fast/cheap, appropriate for structured classification) |
+| `GEMINI_TIMEOUT_SECONDS` | `4.0` | Hard cap on a single Gemini call before falling back |
 
 **CORS note:** `ALLOWED_ORIGINS` is never `*`. If your dashboard runs on
 a different port, add it to this list (comma-separated) in your `.env`.
@@ -113,7 +146,7 @@ All responses are JSON. All errors follow this shape:
 | GET | `/api/network/status` | Current simulated network state | — | `{"congestion":bool,"load_percent":int,"bandwidth_mbps":float,"semantic_routing_enabled":bool,"active_connections":int,"timestamp":str}` |
 | GET | `/api/traffic` | List active traffic with live metrics | — | `{"traffic":[{...}]}` |
 | POST | `/api/traffic` | Create a traffic flow | `{"type":"emergency","label":"optional"}` | `201` created traffic item incl. metrics |
-| POST | `/api/classify` | Classify free-text input | `{"input":"some text"}` | `{"category":str,"confidence":float,"priority":int}` |
+| POST | `/api/classify` | Semantic analysis + priority for free-text input | `{"input":"some text"}` | `{"category":str,"confidence":float,"priority":float,"priority_factors":{...},"low_confidence":bool,"source":"gemini"\|"fallback","reason":str}` |
 | POST | `/api/simulation/congestion` | Toggle congestion | `{"enabled":bool}` | `{"congestion":bool,"load_percent":int,"bandwidth_mbps":float}` |
 | POST | `/api/simulation/semantic-routing` | Toggle semantic routing | `{"enabled":bool}` | `{"semantic_routing_enabled":bool}` |
 | POST | `/api/simulation/run` | Run one deterministic simulation step | — | `{"simulation_id":str,"network":{...},"results":[{...}]}` |
@@ -122,8 +155,8 @@ All responses are JSON. All errors follow this shape:
 | POST | `/api/demo/congest` | Enable congestion + run simulation | — | `{"simulation_id":str,"network":{...},"results":[...]}` |
 | POST | `/api/demo/compare` | Baseline vs. semantic routing comparison | — | `{"baseline":[...],"semantic":[...],"improvement":[...]}` |
 
-Traffic `type` must be one of: `emergency`, `critical_sensor`, `video`,
-`file`, `background`. Any other value returns `400 INVALID_REQUEST`.
+Traffic `type` must be one of: `emergency`, `critical_sensor`, `real_time`,
+`video`, `file`, `background`. Any other value returns `400 INVALID_REQUEST`.
 
 Traffic items and simulation results include a computed `status` field
 (`normal`, `protected`, `degraded`, `throttled`, `fair`) useful for
@@ -141,7 +174,23 @@ curl -X POST http://localhost:5000/api/traffic \
 
 curl -X POST http://localhost:5000/api/classify \
   -H "Content-Type: application/json" \
-  -d '{"input": "Critical heart rate anomaly detected"}'
+  -d '{"input": "Factory temperature exceeded dangerous threshold"}'
+# ->
+# {
+#   "category": "critical_sensor",
+#   "confidence": 0.94,
+#   "priority": 8.9,
+#   "priority_factors": {
+#     "urgency": 0.92, "consequence": 0.95,
+#     "latency_sensitivity": 0.88, "reliability_requirement": 0.93
+#   },
+#   "low_confidence": false,
+#   "source": "gemini",
+#   "reason": "Dangerous sensor condition requiring rapid response."
+# }
+# (with no GEMINI_API_KEY set, "source" is "fallback" and the factors
+# come from config.FALLBACK_SEMANTIC_FACTORS for the detected category
+# instead of a live semantic read of this specific description)
 
 curl -X POST http://localhost:5000/api/simulation/congestion \
   -H "Content-Type: application/json" \
@@ -165,42 +214,111 @@ curl -X POST http://localhost:5000/api/traffic \
   -H "Content-Type: application/json" -d '{"type": "not_a_type"}'
 ```
 ```json
-{"error":{"code":"INVALID_REQUEST","message":"Field 'type' must be one of: emergency, critical_sensor, video, file, background."}}
+{"error":{"code":"INVALID_REQUEST","message":"Field 'type' must be one of: emergency, critical_sensor, real_time, video, file, background."}}
 ```
 
-## 7. Semantic Priority
+## 7. Semantic Priority Engine
 
-Centralized in `config.py`:
+**Priority is not a function of category alone.** Two `critical_sensor`
+items can land anywhere from ~1.5 (routine reading) to ~9.5 (dangerous
+threshold exceeded) depending on what the traffic actually describes.
+
+### Semantic factors (each 0.0-1.0)
+
+Extracted per traffic description by `services/semantic_service.py`
+(Gemini, or the deterministic fallback):
+
+| Factor | Question it answers |
+|---|---|
+| `urgency` | How quickly must this be delivered? |
+| `consequence` | How bad is it if this is delayed or dropped? |
+| `latency_sensitivity` | Does this need near-real-time delivery? |
+| `reliability_requirement` | How important is guaranteed successful delivery? |
+
+### The formula (`services/priority_service.py`, weights in `config.PRIORITY_WEIGHTS`)
 
 ```python
-PRIORITY_MAP = {
-    "emergency": 10,
-    "critical_sensor": 9,
-    "video": 5,
-    "file": 2,
-    "background": 1,
-}
+priority = 10 * (
+    0.35 * urgency
+  + 0.30 * consequence
+  + 0.20 * latency_sensitivity
+  + 0.15 * reliability_requirement
+)
 ```
 
+**These weights are a manually chosen starting policy, not a
+machine-learned result.** They are honest, documented reasoning, kept
+in `config.py` so they can be tuned after live testing without
+touching code. Ordering: `urgency` (0.35) > `consequence` (0.30) >
+`latency_sensitivity` (0.20) > `reliability_requirement` (0.15).
+- `urgency` is weighted highest — how soon something must move is the
+  most directly actionable signal for a network scheduler.
+- `consequence` is weighted second — closely reinforces urgency (what
+  happens if it's late), but alone is a slower-acting concern (e.g. a
+  consequential-but-not-urgent scheduled safety check).
+- `latency_sensitivity` is weighted third — needing near-real-time
+  delivery matters, but real-time-ness alone doesn't imply importance
+  (a casual video call is latency-sensitive but not high-stakes).
+- `reliability_requirement` is weighted lowest — it's the factor most
+  correlated with the other three already (urgent/consequential traffic
+  usually also needs reliable delivery), so weighting it high would
+  effectively double-count the same signal.
+
+### Category safety bounds (`config.CATEGORY_PRIORITY_BOUNDS`)
+
+A guardrail, not the primary mechanism — the raw formula above is
+clamped into a `(min, max)` range per category so a single noisy or
+hallucinated factor can't push e.g. `background` traffic to a 10, or
+`emergency` traffic below a safe floor:
+
+| Category | Bounds | Reasoning |
+|---|---|---|
+| `emergency` | (7.5, 10.0) | By definition must stay in the top safety tier regardless of factor noise |
+| `critical_sensor` | (1.0, 10.0) | Genuinely spans routine to dangerous — bounds only prevent literal zero |
+| `real_time` | (2.0, 8.5) | Interactive/control traffic is rarely background-level; top band reserved for true emergencies |
+| `video` | (1.0, 7.5) | Ordinary streaming shouldn't outrank real emergencies |
+| `file` | (0.3, 6.0) | Bulk transfers are rarely top-tier, but an "emergency patch" file can still be elevated |
+| `background` | (0.0, 3.5) | Should never compete with anything time-sensitive, regardless of factor noise |
+
+Within its bounds, the semantic factors still fully determine where an
+item lands — the bounds only stop obviously-wrong outcomes at the edges.
+
+### Confidence vs. priority
+
+These measure different things and are never conflated: confidence is
+"how certain is this classification", priority is "how important is
+this traffic." Confidence is **never multiplied into priority**.
+Instead, if confidence is below `config.LOW_CONFIDENCE_THRESHOLD`
+(default `0.55`), the response is marked `low_confidence: true` and
+priority is dampened conservatively — capped at the midpoint of
+whatever category's bound range it landed in, so an uncertain guess
+can never reach the top of that tier (and is never bumped to
+emergency-level priority just because that happened to be the guess).
+
+### Network simulation behavior
+
 - **Semantic routing ON + congestion:** delivery is interpolated by
-  priority — emergency stays near ~98% delivered, background drops to
-  ~5%. High priority is clearly protected.
+  priority — high-priority traffic stays well-protected, low-priority
+  traffic is sacrificed. Because priority is now continuous, this is a
+  smooth gradient, not 5 fixed tiers.
 - **Semantic routing OFF + congestion:** every traffic type gets the
-  same "fair share" degraded service (~55-65% delivery) regardless of
-  priority — this is the "before" picture for the demo.
-- **No congestion:** everything gets good service (~97-99.5% delivery)
-  regardless of routing mode, since there's nothing to prioritize.
+  same "fair share" degraded service regardless of priority — the
+  "before" picture for the demo.
+- **No congestion:** everything gets good service regardless of routing
+  mode, since there's nothing to prioritize.
 
 `POST /api/demo/compare` runs both modes side-by-side (without touching
 real state) so the frontend can render a clear before/after chart for
-judges.
+judges. `services/routing_service.py` only ever consumes the final
+`priority` number — it never calls Gemini and doesn't know semantic
+analysis exists.
 
 ## 8. Demo Workflow
 
 For a live demo, this sequence tells a complete story:
 
 ```bash
-curl -X POST http://localhost:5000/api/demo/reset     # clean slate, 4 traffic flows, no congestion
+curl -X POST http://localhost:5000/api/demo/reset     # clean slate, 5 descriptive traffic flows, no congestion
 curl -X POST http://localhost:5000/api/demo/compare    # show baseline vs semantic side by side
 curl -X POST http://localhost:5000/api/demo/congest    # trigger congestion, show semantic routing protecting emergency traffic live
 curl -X POST http://localhost:5000/api/simulation/reset  # back to clean state if you want to re-run
@@ -226,30 +344,28 @@ against the table in section 6. The API contract (endpoint names + JSON
 field names) is stable — new fields may be added, existing ones won't be
 renamed or removed without discussion.
 
-**AI/classification teammate:** the `POST /api/classify` route
-(`routes/classify.py`) only calls `classifier_service.classify_text()`.
-To plug in a real model, implement `BaseClassifier.classify(text) ->
-(category, confidence)` in `services/classifier_service.py` and call
-`set_classifier(YourClassifier())`. Nothing else in the codebase needs
-to change, and the response shape (`category`/`confidence`/`priority`)
-stays the same.
+**AI/classification teammate:** semantic analysis is fully wired to
+Gemini already (`services/gemini_service.py` + `services/semantic_service.py`).
+Set `GEMINI_API_KEY` in `.env` to activate it — with no key, the system
+runs entirely on the deterministic fallback, so nothing breaks if the
+key isn't configured. Things you can safely tune without touching
+anything else:
+- The Gemini prompt/system instruction: `gemini_service.SYSTEM_INSTRUCTION`.
+- The model: `GEMINI_MODEL` in `.env` (default `gemini-3.5-flash-lite`).
+- The fallback's per-category typical factors: `config.FALLBACK_SEMANTIC_FACTORS`.
+- The priority weights/bounds: `config.PRIORITY_WEIGHTS` / `config.CATEGORY_PRIORITY_BOUNDS`.
 
-A real implementation is already wired in: `GeminiClassifier` calls
-Google's Gemini API (ported from the "HackyWacky" prototype) and maps
-its 4 severity tiers onto our 5 categories. It activates automatically
-when `GEMINI_API_KEY` is set in `.env` — with no key, `POST
-/api/classify` keeps using the deterministic `RuleBasedClassifier`, so
-nothing breaks if the key isn't configured. It also falls back to
-`RuleBasedClassifier` on any Gemini API error (bad key, rate limit,
-network issue, malformed response), so a live demo never crashes
-because of an external API hiccup. Set `model="..."` in the
-`GeminiClassifier(client, model=...)` call in `_build_default_classifier()`
-if you want a different Gemini model.
+If you want to swap in a different classification approach entirely
+(e.g. a trained model instead of Gemini), it only needs to conform to
+`semantic_service.analyze(text) -> {category, confidence, factors, reason, source}`
+— `routes/classify.py` and `priority_service.py` don't need to change.
 
 **Networking/simulation teammate:** `services/routing_service.py` is
-where congestion behavior is computed (`compute_metrics`). The
-simulation is intentionally deterministic (no `random` calls) so a live
-demo is reproducible — if you extend it, keep it that way.
+where congestion behavior is computed (`compute_metrics`). It only ever
+consumes the final `priority` float — it never calls Gemini and has no
+knowledge that semantic analysis exists. The simulation is intentionally
+deterministic (no `random` calls) so a live demo is reproducible — if
+you extend it, keep it that way.
 
 ## 11. Known Limitations
 
@@ -259,8 +375,24 @@ demo is reproducible — if you extend it, keep it that way.
   clean slate.
 - Single-process, no persistence, no auth — by design, for a 36-hour
   hackathon demo, not production use.
-- The rule-based classifier in `classifier_service.py` is a deterministic
-  keyword matcher, a placeholder for a real model.
+- The deterministic fallback (used with no `GEMINI_API_KEY`, or when
+  Gemini fails) can only estimate *typical* semantic factors for the
+  category it detects via keyword matching — it genuinely cannot
+  distinguish "routine" from "dangerous" within a category the way
+  Gemini's contextual analysis can. This is a known, disclosed
+  limitation of fallback mode, not a bug: every fallback response is
+  marked `"source": "fallback"` so it's never mistaken for a real
+  semantic read.
+- The priority weights (`config.PRIORITY_WEIGHTS`) are a manually
+  chosen starting policy, not learned from data — see section 7 for
+  the documented reasoning. They're expected to be tuned after live
+  testing.
 - Metrics (latency/packet loss/delivery) are computed with simple,
   deterministic formulas tuned to look realistic for a demo — they are
   not derived from real network simulation.
+- Gemini itself is not perfectly deterministic even at `temperature=0.1`
+  with a fixed `seed` — true determinism for *repeated* inputs is
+  guaranteed by the in-memory cache (`services/semantic_service.py`),
+  not by Gemini's own consistency. A brand-new phrasing of the same
+  underlying situation could, in principle, get a slightly different
+  score from Gemini on different runs.

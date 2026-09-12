@@ -28,11 +28,14 @@ def test_create_traffic_valid(client):
     data = resp.get_json()
     assert data["type"] == "emergency"
     assert data["label"] == "Ambulance alert"
-    assert data["priority"] == 10
+    assert 7.5 <= data["priority"] <= 10.0  # emergency's safety bound range
     assert data["id"].startswith("traffic-")
     assert "delivery_percent" in data
     assert "latency_ms" in data
     assert "packet_loss_percent" in data
+    assert "priority_factors" in data
+    assert "low_confidence" in data
+    assert "source" in data
 
 
 def test_create_traffic_generates_server_side_id_and_ignores_client_id(client):
