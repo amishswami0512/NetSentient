@@ -40,7 +40,17 @@ SYSTEM_INSTRUCTION = (
     "emergency; 'live emergency response video feed' is very different from 'live "
     "gaming stream'; 'routine temperature reading' is very different from "
     "'temperature exceeded fire safety threshold'. Judge the actual situation "
-    "described, not surface-level word matches."
+    "described, not surface-level word matches.\n\n"
+    "The description may be phrased casually or in plain language, not "
+    "necessarily as formal technical alert syntax -- do not lower your "
+    "confidence just because the phrasing is informal or conversational. "
+    "'Person got bit by a dog and did not get rabies vaccination' clearly "
+    "describes a real medical emergency and should be analyzed with the same "
+    "confidence as if it were phrased 'Health monitor alert: dog bite, rabies "
+    "vaccination status unknown'. Reserve low confidence for cases where WHAT "
+    "is happening is genuinely unclear (e.g. a single word with no situational "
+    "context, like 'data' or 'update' on its own), not for clear situations "
+    "that happen to be phrased informally."
 )
 
 
