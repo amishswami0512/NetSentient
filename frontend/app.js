@@ -2,7 +2,7 @@ const API_BASE = 'http://localhost:5000/api';
 
 // State Tracking
 let isCongested = false;
-let isQosEnabled = false;
+let isQosEnabled = true;
 
 // Elements
 const btnCongestion = document.getElementById('btn-congestion');
@@ -12,6 +12,21 @@ const valEmergency = document.getElementById('val-emergency');
 const valSensor = document.getElementById('val-sensor');
 const valVideo = document.getElementById('val-video');
 const valFile = document.getElementById('val-file');
+
+// Maps backend traffic "type" to this dashboard's 4 tier cards/chart series.
+const TYPE_TO_INDEX = { emergency: 0, critical_sensor: 1, video: 2, file: 3 };
+
+// Badge style per category for the AI analysis box -- covers all 6
+// backend categories (including real_time, which the 4-card layout
+// above doesn't have room for) so nothing gets mislabeled.
+const CATEGORY_STYLE = {
+  emergency: { label: 'Emergency', className: 'px-4 py-1 rounded-full bg-red-600 text-white font-bold text-lg shadow-[0_0_15px_rgba(220,38,38,0.6)] animate-pulse' },
+  critical_sensor: { label: 'Critical Sensor', className: 'px-4 py-1 rounded-full bg-amber-500 text-slate-900 font-bold text-lg' },
+  real_time: { label: 'Real-Time Control', className: 'px-4 py-1 rounded-full bg-orange-500 text-slate-900 font-bold text-lg' },
+  video: { label: 'Video', className: 'px-4 py-1 rounded-full bg-blue-500 text-white font-bold text-lg' },
+  file: { label: 'File Transfer', className: 'px-4 py-1 rounded-full bg-slate-600 text-white font-bold text-lg' },
+  background: { label: 'Background', className: 'px-4 py-1 rounded-full bg-slate-600 text-white font-bold text-lg' },
+};
 
 // Chart Setup
 const ctx = document.getElementById('trafficChart').getContext('2d');
@@ -33,7 +48,10 @@ const trafficChart = new Chart(ctx, {
     maintainAspectRatio: false,
     scales: {
       x: { grid: { color: '#334155' }, ticks: { color: '#94a3b8' } },
-      y: { grid: { color: '#334155' }, ticks: { color: '#94a3b8' }, beginAtZero: true, max: 100 }
+      y: {
+        grid: { color: '#334155' }, ticks: { color: '#94a3b8' }, beginAtZero: true, max: 100,
+        title: { display: true, text: '% Delivered', color: '#94a3b8' }
+      }
     },
     plugins: {
       legend: { labels: { color: '#f8fafc' } }
@@ -41,91 +59,122 @@ const trafficChart = new Chart(ctx, {
   }
 });
 
+function setToggleButtonState() {
+  btnCongestion.textContent = `Simulate Congestion: ${isCongested ? 'ON' : 'OFF'}`;
+  btnCongestion.className = isCongested
+    ? 'px-5 py-2.5 rounded-lg bg-red-700 font-bold border-2 border-white text-white shadow-lg'
+    : 'px-5 py-2.5 rounded-lg bg-red-600 hover:bg-red-500 text-white font-semibold shadow-lg';
+
+  btnQos.textContent = `AI Priority (QoS): ${isQosEnabled ? 'ON' : 'OFF'}`;
+  btnQos.className = isQosEnabled
+    ? 'px-5 py-2.5 rounded-lg bg-emerald-700 font-bold border-2 border-white text-white shadow-lg'
+    : 'px-5 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold shadow-lg';
+}
+
 // Toggle Handlers
 btnCongestion.addEventListener('click', async () => {
   isCongested = !isCongested;
-  btnCongestion.textContent = `Simulate Congestion: ${isCongested ? 'ON' : 'OFF'}`;
-  btnCongestion.className = isCongested 
-    ? 'px-5 py-2.5 rounded-lg bg-red-700 font-bold border-2 border-white text-white shadow-lg' 
-    : 'px-5 py-2.5 rounded-lg bg-red-600 hover:bg-red-500 text-white font-semibold shadow-lg';
-  
+  setToggleButtonState();
   try {
-    await fetch(`${API_BASE}/toggle_congestion`, {
+    await fetch(`${API_BASE}/simulation/congestion`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ congestion: isCongested })
+      body: JSON.stringify({ enabled: isCongested })
     });
   } catch (err) {
-    console.warn('Backend server not connected yet. Running in offline UI mode.');
+    console.warn('Backend server not reachable:', err);
   }
 });
 
 btnQos.addEventListener('click', async () => {
   isQosEnabled = !isQosEnabled;
-  btnQos.textContent = `AI Priority (QoS): ${isQosEnabled ? 'ON' : 'OFF'}`;
-  btnQos.className = isQosEnabled 
-    ? 'px-5 py-2.5 rounded-lg bg-emerald-700 font-bold border-2 border-white text-white shadow-lg' 
-    : 'px-5 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold shadow-lg';
-
+  setToggleButtonState();
   try {
-    await fetch(`${API_BASE}/toggle_qos`, {
+    await fetch(`${API_BASE}/simulation/semantic-routing`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ qos_enabled: isQosEnabled })
+      body: JSON.stringify({ enabled: isQosEnabled })
     });
   } catch (err) {
-    console.warn('Backend server not connected yet. Running in offline UI mode.');
+    console.warn('Backend server not reachable:', err);
   }
 });
+
 // --- AI Box Logic ---
 const aiPayloadText = document.getElementById('ai-payload-text');
 const aiTierBadge = document.getElementById('ai-tier-badge');
 const aiReasoningText = document.getElementById('ai-reasoning-text');
+const aiInput = document.getElementById('ai-input');
+const aiAnalyzeBtn = document.getElementById('ai-analyze-btn');
 
-function updateAIBox(payload, tier, reasoning) {
-    if (!payload) return; // safety check
-    aiPayloadText.textContent = `"${payload}"`;
-    aiReasoningText.textContent = reasoning;
-    
-    if (tier === 1) {
-        aiTierBadge.className = 'px-4 py-1 rounded-full bg-red-600 text-white font-bold text-lg shadow-[0_0_15px_rgba(220,38,38,0.6)] animate-pulse';
-        aiTierBadge.textContent = 'Tier 1 (Emergency)';
-    } else if (tier === 2) {
-        aiTierBadge.className = 'px-4 py-1 rounded-full bg-amber-500 text-slate-900 font-bold text-lg';
-        aiTierBadge.textContent = 'Tier 2 (Sensor)';
-    } else if (tier === 3) {
-        aiTierBadge.className = 'px-4 py-1 rounded-full bg-blue-500 text-white font-bold text-lg';
-        aiTierBadge.textContent = 'Tier 3 (Video)';
-    } else {
-        aiTierBadge.className = 'px-4 py-1 rounded-full bg-slate-600 text-white font-bold text-lg';
-        aiTierBadge.textContent = 'Tier 4 (Bulk)';
-    }
+function updateAIBox(payload, category, reasoning) {
+  if (!payload) return; // safety check
+  aiPayloadText.textContent = `"${payload}"`;
+  aiReasoningText.textContent = reasoning;
+
+  const style = CATEGORY_STYLE[category] || CATEGORY_STYLE.background;
+  aiTierBadge.className = style.className;
+  aiTierBadge.textContent = style.label;
 }
+
+async function classifyText(text) {
+  aiAnalyzeBtn.disabled = true;
+  aiAnalyzeBtn.textContent = 'Analyzing...';
+  try {
+    const res = await fetch(`${API_BASE}/classify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ input: text })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error?.message || 'Classification failed');
+
+    // Show the actual semantic analysis (Gemini's own reasoning, or the
+    // deterministic fallback's) rather than a generic client-built string
+    // -- this is the whole point of the semantic priority engine.
+    const sourceNote = data.source === 'gemini' ? 'Gemini' : 'fallback (no Gemini key configured)';
+    const confidenceNote = data.low_confidence ? ' -- low confidence, priority capped conservatively' : '';
+    const reasoning = `${data.reason} [priority ${data.priority}/10 via ${sourceNote}, confidence ${Math.round(data.confidence * 100)}%${confidenceNote}]`;
+    updateAIBox(text, data.category, reasoning);
+  } catch (err) {
+    updateAIBox(text, 'background', `Could not reach the classifier: ${err.message}`);
+  } finally {
+    aiAnalyzeBtn.disabled = false;
+    aiAnalyzeBtn.textContent = 'Analyze';
+  }
+}
+
+aiAnalyzeBtn.addEventListener('click', () => {
+  const text = aiInput.value.trim();
+  if (text) classifyText(text);
+});
+aiInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') aiAnalyzeBtn.click();
+});
 // --------------------
 
-
-
-// Live Metrics Fetcher
+// Live Metrics Fetcher — pulls real traffic + delivery metrics from the backend.
 async function fetchMetrics() {
   try {
-    const res = await fetch(`${API_BASE}/metrics`);
+    const res = await fetch(`${API_BASE}/traffic`);
     const data = await res.json();
-    
-    updateUI(data.emergency || 0, data.sensor || 0, data.video || 0, data.file || 0);
-    if (data.payload) updateAIBox(data.payload, data.tier, data.reasoning);
+    const values = [0, 0, 0, 0];
+    for (const item of data.traffic || []) {
+      const idx = TYPE_TO_INDEX[item.type];
+      if (idx !== undefined) values[idx] = item.delivery_percent;
+    }
+    updateUI(...values);
   } catch (err) {
-    // Fallback dummy data generation if backend isn't running yet
-    const timeNow = new Date().toLocaleTimeString();
-    updateUI(20, 30, 40, 50, timeNow);
+    console.warn('Backend server not reachable:', err);
   }
 }
 
 function updateUI(emergency, sensor, video, file, timeStamp = new Date().toLocaleTimeString()) {
-  // Update Text Cards
-  valEmergency.innerHTML = `${emergency} <span class="text-sm font-normal text-slate-400">Mbps</span>`;
-  valSensor.innerHTML = `${sensor} <span class="text-sm font-normal text-slate-400">Mbps</span>`;
-  valVideo.innerHTML = `${video} <span class="text-sm font-normal text-slate-400">Mbps</span>`;
-  valFile.innerHTML = `${file} <span class="text-sm font-normal text-slate-400">Mbps</span>`;
+  // Update Text Cards — showing % of that traffic type getting delivered right now.
+  valEmergency.innerHTML = `${emergency} <span class="text-sm font-normal text-slate-400">%</span>`;
+  valSensor.innerHTML = `${sensor} <span class="text-sm font-normal text-slate-400">%</span>`;
+  valVideo.innerHTML = `${video} <span class="text-sm font-normal text-slate-400">%</span>`;
+  valFile.innerHTML = `${file} <span class="text-sm font-normal text-slate-400">%</span>`;
 
   // Update Chart
   if (chartData.labels.length > 15) {
@@ -141,6 +190,25 @@ function updateUI(emergency, sensor, video, file, timeStamp = new Date().toLocal
 
   trafficChart.update();
 }
+
+async function init() {
+  try {
+    // Seed the standard demo traffic set (emergency/critical_sensor/video/file).
+    await fetch(`${API_BASE}/demo/reset`, { method: 'POST' });
+
+    // Sync toggle buttons to actual backend state.
+    const statusRes = await fetch(`${API_BASE}/network/status`);
+    const status = await statusRes.json();
+    isCongested = status.congestion;
+    isQosEnabled = status.semantic_routing_enabled;
+    setToggleButtonState();
+  } catch (err) {
+    console.warn('Could not reach backend at startup:', err);
+  }
+  fetchMetrics();
+}
+
+init();
 
 // Poll every 1 second
 setInterval(fetchMetrics, 1000);
