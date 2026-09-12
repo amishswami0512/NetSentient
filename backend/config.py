@@ -150,4 +150,10 @@ class Config:
     # Hard cap on how long a single Gemini call may take before we give
     # up and use the fallback. Keeps a single slow/hanging API call from
     # ever stalling a request during a live demo.
-    GEMINI_TIMEOUT_SECONDS = float(os.environ.get("GEMINI_TIMEOUT_SECONDS", "4.0"))
+    #
+    # Must stay >= 10s: the Gemini API server itself rejects any shorter
+    # manually-set deadline with "400 INVALID_ARGUMENT: Manually set
+    # deadline Xs is too short. Minimum allowed deadline is 10s." A
+    # lower default here would make every real Gemini call fail
+    # outright, regardless of how valid the API key is.
+    GEMINI_TIMEOUT_SECONDS = float(os.environ.get("GEMINI_TIMEOUT_SECONDS", "12.0"))

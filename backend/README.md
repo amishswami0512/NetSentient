@@ -126,7 +126,7 @@ All optional — see `.env.example`. Copy it to `.env` to override defaults.
 | `MAX_CONTENT_LENGTH_BYTES` | `65536` | Max accepted request body size |
 | `GEMINI_API_KEY` | *(empty)* | Optional. If set, `POST /api/classify` and traffic creation use real Gemini semantic analysis. If unset, the deterministic fallback is used and the app works identically otherwise. |
 | `GEMINI_MODEL` | `gemini-3.5-flash-lite` | Gemini model used for semantic analysis (fast/cheap, appropriate for structured classification) |
-| `GEMINI_TIMEOUT_SECONDS` | `4.0` | Hard cap on a single Gemini call before falling back |
+| `GEMINI_TIMEOUT_SECONDS` | `12.0` | Hard cap on a single Gemini call before falling back. Must be >= 10 -- the Gemini API server rejects a shorter deadline outright regardless of API key validity |
 
 **CORS note:** `ALLOWED_ORIGINS` is never `*`. If your dashboard runs on
 a different port, add it to this list (comma-separated) in your `.env`.
