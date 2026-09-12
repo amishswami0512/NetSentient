@@ -1,5 +1,6 @@
 from flask import Blueprint, jsonify
 
+from services.classifier_service import ClassifierUnavailableError
 from services import routing_service, simulation_service
 from services.state_service import state
 
@@ -8,7 +9,10 @@ demo_bp = Blueprint("demo", __name__)
 
 @demo_bp.route("/api/demo/reset", methods=["POST"])
 def demo_reset():
-    traffic = simulation_service.seed_demo_traffic()
+    try:
+        traffic = simulation_service.seed_demo_traffic()
+    except ClassifierUnavailableError as error:
+        return jsonify({"error": {"code": "CLASSIFIER_UNAVAILABLE", "message": str(error)}}), 503
     return jsonify({"traffic": traffic, "network": routing_service.get_network_status()}), 200
 
 

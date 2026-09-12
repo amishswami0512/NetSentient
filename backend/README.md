@@ -113,7 +113,7 @@ All responses are JSON. All errors follow this shape:
 | GET | `/api/network/status` | Current simulated network state | — | `{"congestion":bool,"load_percent":int,"bandwidth_mbps":float,"semantic_routing_enabled":bool,"active_connections":int,"timestamp":str}` |
 | GET | `/api/traffic` | List active traffic with live metrics | — | `{"traffic":[{...}]}` |
 | POST | `/api/traffic` | Create a traffic flow | `{"type":"emergency","label":"optional"}` | `201` created traffic item incl. metrics |
-| POST | `/api/classify` | Classify free-text input | `{"input":"some text"}` | `{"category":str,"confidence":float,"priority":int}` |
+| POST | `/api/classify` | Classify free-text input with Gemini | `{"input":"some text"}` | `{"category":str,"confidence":float,"criticality_score":float,"priority":float,"reasoning":str,"provider":str}` |
 | POST | `/api/simulation/congestion` | Toggle congestion | `{"enabled":bool}` | `{"congestion":bool,"load_percent":int,"bandwidth_mbps":float}` |
 | POST | `/api/simulation/semantic-routing` | Toggle semantic routing | `{"enabled":bool}` | `{"semantic_routing_enabled":bool}` |
 | POST | `/api/simulation/run` | Run one deterministic simulation step | — | `{"simulation_id":str,"network":{...},"results":[{...}]}` |
@@ -124,6 +124,10 @@ All responses are JSON. All errors follow this shape:
 
 Traffic `type` must be one of: `emergency`, `critical_sensor`, `video`,
 `file`, `background`. Any other value returns `400 INVALID_REQUEST`.
+
+AI-analyzed traffic receives its category and `criticality_score` directly from
+Gemini. The score is a one-decimal number from 1.0 to 10.0, where 10.0 is most critical.
+`priority` remains in responses as a compatibility alias for that score.
 
 Traffic items and simulation results include a computed `status` field
 (`normal`, `protected`, `degraded`, `throttled`, `fair`) useful for
@@ -228,23 +232,18 @@ renamed or removed without discussion.
 
 **AI/classification teammate:** the `POST /api/classify` route
 (`routes/classify.py`) only calls `classifier_service.classify_text()`.
-To plug in a real model, implement `BaseClassifier.classify(text) ->
-(category, confidence)` in `services/classifier_service.py` and call
-`set_classifier(YourClassifier())`. Nothing else in the codebase needs
-to change, and the response shape (`category`/`confidence`/`priority`)
-stays the same.
+To plug in a different model, implement `BaseClassifier.classify(text)`
+in `services/classifier_service.py` and call `set_classifier(YourClassifier())`.
+The classifier must return a category, confidence, reasoning, provider,
+and a `criticality_score` from 1.0 through 10.0. `priority` is returned as a
+compatibility alias of that score.
 
-A real implementation is already wired in: `GeminiClassifier` calls
-Google's Gemini API (ported from the "HackyWacky" prototype) and maps
-its 4 severity tiers onto our 5 categories. It activates automatically
-when `GEMINI_API_KEY` is set in `.env` — with no key, `POST
-/api/classify` keeps using the deterministic `RuleBasedClassifier`, so
-nothing breaks if the key isn't configured. It also falls back to
-`RuleBasedClassifier` on any Gemini API error (bad key, rate limit,
-network issue, malformed response), so a live demo never crashes
-because of an external API hiccup. Set `model="..."` in the
-`GeminiClassifier(client, model=...)` call in `_build_default_classifier()`
-if you want a different Gemini model.
+`GeminiClassifier` is the only production classifier. It asks Gemini to
+choose among `emergency`, `critical_sensor`, `video`, `file`, and
+`background`, and to assign the criticality score itself. If
+`GEMINI_API_KEY` is missing or Gemini fails, the API returns
+`CLASSIFIER_UNAVAILABLE` rather than silently inventing a classification.
+Set `GEMINI_MODEL` if you want a different Gemini model.
 
 **Networking/simulation teammate:** `services/routing_service.py` is
 where congestion behavior is computed (`compute_metrics`). The

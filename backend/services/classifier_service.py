@@ -1,133 +1,90 @@
-"""Traffic classification, behind a swappable abstraction.
-
-The rest of the backend only ever calls `classify_text()`. The temporary
-rule-based implementation below can be swapped out later (e.g. by the
-AI/ML teammate) by calling `set_classifier()` with a different
-BaseClassifier subclass -- no route or other service needs to change,
-and the POST /api/classify contract (category/confidence/priority)
-stays stable.
-"""
 import json
 import logging
 import os
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 
-from config import PRIORITY_MAP
+from config import SUPPORTED_TRAFFIC_TYPES
 
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class ClassificationResult:
+    category: str
+    confidence: float
+    criticality_score: float
+    reasoning: str
+    provider: str
+
+
+class ClassifierUnavailableError(RuntimeError):
+    """Raised when the configured AI classifier cannot produce a result."""
+
+
 class BaseClassifier(ABC):
     @abstractmethod
-    def classify(self, text: str) -> tuple[str, float]:
-        """Return (category, confidence) for the given input text."""
+    def classify(self, text: str) -> ClassificationResult:
         raise NotImplementedError
 
 
-class RuleBasedClassifier(BaseClassifier):
-    """Deterministic keyword-matching classifier.
+class UnconfiguredGeminiClassifier(BaseClassifier):
+    """Prevents production traffic from being classified by keyword rules."""
 
-    A stand-in for a real model: scores each category by counting
-    keyword hits, deterministically breaks ties toward the
-    higher-priority category (safer default for a safety-relevant
-    router), and falls back to "background" when nothing matches.
-    """
-
-    KEYWORDS: dict[str, list[str]] = {
-        "emergency": [
-            "emergency", "ambulance", "fire", "evacuat", "911",
-            "disaster", "urgent alert", "life-threatening", "sos",
-        ],
-        "critical_sensor": [
-            "heart rate", "sensor", "vital", "anomaly", "oxygen",
-            "blood pressure", "medical", "patient", "icu", "glucose",
-        ],
-        "video": [
-            "video", "call", "stream", "conference", "zoom", "meeting",
-        ],
-        "file": [
-            "file", "upload", "download", "transfer", "document", "attachment",
-        ],
-        "background": [
-            "update", "background", "sync", "backup", "telemetry", "patch",
-        ],
-    }
-
-    FALLBACK_CATEGORY = "background"
-    FALLBACK_CONFIDENCE = 0.30
-
-    def classify(self, text: str) -> tuple[str, float]:
-        normalized = text.lower()
-        scores: dict[str, int] = {
-            category: sum(1 for kw in keywords if kw in normalized)
-            for category, keywords in self.KEYWORDS.items()
-        }
-
-        best_score = max(scores.values())
-        if best_score == 0:
-            return self.FALLBACK_CATEGORY, self.FALLBACK_CONFIDENCE
-
-        # Tie-break toward the higher-priority category.
-        candidates = [c for c, s in scores.items() if s == best_score]
-        category = max(candidates, key=lambda c: PRIORITY_MAP[c])
-        confidence = round(min(0.99, 0.60 + 0.12 * best_score), 2)
-        return category, confidence
+    def classify(self, text: str) -> ClassificationResult:
+        raise ClassifierUnavailableError(
+            "Gemini is not configured. Create backend/.env and set GEMINI_API_KEY, then restart Flask."
+        )
 
 
 class GeminiClassifier(BaseClassifier):
-    """Real AI classifier backed by Google's Gemini API.
-
-    Ported from the AI teammate's "HackyWacky" prototype: prompts Gemini
-    to sort a payload into one of 4 severity tiers, then maps that tier
-    onto our 5-category contract. Keeps the same in-memory cache (0ms
-    repeat lookups) and the same "never let a bad API call take down
-    classification" fallback -- except the fallback here delegates to
-    RuleBasedClassifier instead of guessing a fixed tier, so a Gemini
-    outage never produces a worse answer than the deterministic default.
-    """
-
-    TIER_TO_CATEGORY: dict[int, str] = {
-        1: "emergency",
-        2: "critical_sensor",
-        3: "video",
-        4: "background",
-    }
-
     SYSTEM_INSTRUCTION = (
         "You are an expert Layer-7 network classifier for a critical infrastructure network.\n"
-        "Your task is to analyze the semantic meaning of data packet payloads and categorize them "
-        "into one of four priority tiers:\n"
-        "Tier 1: Emergency/Life Safety/Imminent Failure (e.g., ICU alerts, structural collapse, fire)\n"
-        "Tier 2: Core Operational Sensors (e.g., normal telemetry, status heartbeats, grid metrics)\n"
-        "Tier 3: Standard Communication (e.g., human chat messages, standard logging, standard emails)\n"
-        "Tier 4: Bulk / Background Traffic (e.g., software updates, media streaming, file backups)\n\n"
+        "Analyze the payload as a network-flow description, not as a general news story. "
+        "Return a category plus an independent criticality score from 1.0 to 10.0, in 0.1 increments. Calibrate scores "
+        "carefully: do not call ordinary traffic critical just because it mentions an emergency, "
+        "a hospital, security, or critical infrastructure. Classify the traffic being transmitted.\n"
+        "Use these rules:\n"
+        "- emergency: an immediate life-safety event or imminent catastrophic failure that requires action now; score 9-10 only.\n"
+        "- critical_sensor: an active abnormal medical, industrial, grid, or safety sensor reading, but not an immediate emergency; score 6-8.\n"
+        "- video: a normal video call, camera stream, conference, or media stream, even when it supports emergency operations; score 3-5.\n"
+        "- file: a normal upload, download, backup, patch, document, or archive transfer; score 2-4.\n"
+        "- background: routine synchronization, heartbeat, logging, or low-urgency telemetry; score 1-3.\n"
+        "Never give video, file, or background traffic a 9 or 10. Use 10 rarely: only when the payload itself says immediate action is needed to protect life or prevent catastrophic failure.\n"
+        "Examples: 'routine emergency operations video call' is video around 4, not emergency; "
+        "'nightly database backup' is file around 2; 'ICU oxygen saturation fell to 82 percent' "
+        "is critical_sensor around 7; 'evacuate now due to chemical leak' is emergency around 10.\n"
+        "Choose the category yourself from: emergency, critical_sensor, video, file, background.\n\n"
         "CRITICAL REQUIREMENT: You must respond ONLY with a valid JSON object. Do not include markdown blocks like ```json.\n"
-        "The JSON object must contain exactly two keys:\n"
-        "1. \"tier\": an integer (1, 2, 3, or 4)\n"
-        "2. \"reason\": a brief, single-sentence string explanation."
+        "The JSON object must contain exactly four keys:\n"
+        "1. \"category\": one of the allowed category strings\n"
+        "2. \"criticality_score\": a number from 1.0 through 10.0 with one decimal place\n"
+        "3. \"confidence\": a number from 0 through 1\n"
+        "4. \"reason\": a brief, single-sentence explanation."
     )
-
-    CONFIDENCE = 0.90
 
     def __init__(self, client, model: str = "gemini-3.5-flash-lite") -> None:
         self._client = client
         self._model = model
-        self._cache: dict[str, tuple[str, float]] = {}
-        self._fallback = RuleBasedClassifier()
+        self._cache: dict[str, ClassificationResult] = {}
 
-    def classify(self, text: str) -> tuple[str, float]:
+    def classify(self, text: str) -> ClassificationResult:
         cleaned = text.strip()
         if cleaned in self._cache:
             return self._cache[cleaned]
 
         result = self._classify_via_gemini(cleaned)
-        if result is None:
-            result = self._fallback.classify(cleaned)
-
         self._cache[cleaned] = result
         return result
 
-    def _classify_via_gemini(self, text: str) -> tuple[str, float] | None:
+    def classify_many(self, texts: list[str]) -> list[ClassificationResult]:
+        missing = [text.strip() for text in texts if text.strip() not in self._cache]
+        if missing:
+            results = self._classify_many_via_gemini(missing)
+            self._cache.update(zip(missing, results))
+        return [self._cache[text.strip()] for text in texts]
+
+    def _classify_via_gemini(self, text: str) -> ClassificationResult:
         try:
             from google.genai import types
 
@@ -140,46 +97,131 @@ class GeminiClassifier(BaseClassifier):
                     response_mime_type="application/json",
                 ),
             )
+            return self._parse_result(json.loads(response.text))
+        except Exception as error:
+            logger.exception("Gemini classification failed")
+            if "429" in str(error) or "RESOURCE_EXHAUSTED" in str(error):
+                raise ClassifierUnavailableError(
+                    "Gemini quota is temporarily exhausted. Wait for the quota window to reset "
+                    "or check your Gemini plan and billing details."
+                ) from error
+            raise ClassifierUnavailableError(
+                "Gemini could not analyze this payload. Check GEMINI_API_KEY, GEMINI_MODEL, "
+                "and API availability."
+            ) from error
+
+    def _classify_many_via_gemini(self, texts: list[str]) -> list[ClassificationResult]:
+        try:
+            from google.genai import types
+
+            response = self._client.models.generate_content(
+                model=self._model,
+                contents=(
+                    "Analyze each network payload in this JSON array. Return one classification "
+                    "object per payload in the same order:\n" + json.dumps(texts)
+                ),
+                config=types.GenerateContentConfig(
+                    system_instruction=(
+                        f"{self.SYSTEM_INSTRUCTION}\nFor batch input, return exactly one JSON object "
+                        "with a 'classifications' array. Do not omit any payload."
+                    ),
+                    temperature=0.1,
+                    response_mime_type="application/json",
+                ),
+            )
             parsed = json.loads(response.text)
-            category = self.TIER_TO_CATEGORY[int(parsed["tier"])]
-            return category, self.CONFIDENCE
-        except Exception:
-            logger.exception("Gemini classification failed, falling back to rule-based classifier")
-            return None
+            classifications = parsed["classifications"]
+            if not isinstance(classifications, list) or len(classifications) != len(texts):
+                raise ValueError("Gemini returned the wrong number of classifications.")
+            return [self._parse_result(item) for item in classifications]
+        except Exception as error:
+            logger.exception("Gemini batch classification failed")
+            if "429" in str(error) or "RESOURCE_EXHAUSTED" in str(error):
+                raise ClassifierUnavailableError(
+                    "Gemini quota is temporarily exhausted. Wait for the quota window to reset "
+                    "or check your Gemini plan and billing details."
+                ) from error
+            raise ClassifierUnavailableError(
+                "Gemini could not analyze the demo payloads. Check GEMINI_API_KEY, GEMINI_MODEL, "
+                "and API availability."
+            ) from error
+
+    @staticmethod
+    def _parse_result(parsed: dict[str, object]) -> ClassificationResult:
+        category = parsed["category"]
+        if category not in SUPPORTED_TRAFFIC_TYPES:
+            raise ValueError("Gemini response contained an invalid category.")
+        criticality_score = parsed["criticality_score"]
+        if isinstance(criticality_score, bool) or not isinstance(criticality_score, (int, float)):
+            raise ValueError("Gemini response contained an invalid criticality score.")
+        if not 1 <= criticality_score <= 10:
+            raise ValueError("Gemini criticality score must be between 1 and 10.")
+        confidence = parsed["confidence"]
+        if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
+            raise ValueError("Gemini response contained an invalid confidence score.")
+        if not 0 <= confidence <= 1:
+            raise ValueError("Gemini confidence must be between 0 and 1.")
+        reasoning = parsed["reason"]
+        if not isinstance(reasoning, str) or not reasoning.strip():
+            raise ValueError("Gemini response contained an invalid reason.")
+        return ClassificationResult(
+            category,
+            round(float(confidence), 2),
+            round(float(criticality_score), 1),
+            reasoning.strip(),
+            "gemini",
+        )
 
 
 def _build_default_classifier() -> BaseClassifier:
-    """Use Gemini when configured, otherwise the safe deterministic default.
-
-    Never raises: a missing package, missing API key, or client-init
-    failure all just mean the rule-based classifier stays active.
-    """
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
-        return RuleBasedClassifier()
+        return UnconfiguredGeminiClassifier()
     try:
         from google import genai
 
         client = genai.Client(api_key=api_key)
-        return GeminiClassifier(client)
-    except Exception:
-        logger.exception("Could not initialize GeminiClassifier, using RuleBasedClassifier")
-        return RuleBasedClassifier()
+        return GeminiClassifier(client, model=os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite"))
+    except Exception as error:
+        logger.exception("Could not initialize GeminiClassifier")
+        raise ClassifierUnavailableError(
+            "Gemini could not be initialized. Check GEMINI_API_KEY and the google-genai installation."
+        ) from error
 
 
 _classifier: BaseClassifier = _build_default_classifier()
 
 
 def set_classifier(classifier: BaseClassifier) -> None:
-    """Swap the active classifier implementation (used by teammates later)."""
     global _classifier
     _classifier = classifier
 
 
 def classify_text(text: str) -> dict[str, float | str | int]:
-    category, confidence = _classifier.classify(text)
+    result = _classifier.classify(text)
     return {
-        "category": category,
-        "confidence": confidence,
-        "priority": PRIORITY_MAP[category],
+        "category": result.category,
+        "confidence": result.confidence,
+        "criticality_score": result.criticality_score,
+        "priority": result.criticality_score,
+        "reasoning": result.reasoning,
+        "provider": result.provider,
     }
+
+
+def classify_texts(texts: list[str]) -> list[dict[str, float | str | int]]:
+    if hasattr(_classifier, "classify_many"):
+        results = _classifier.classify_many(texts)  # type: ignore[attr-defined]
+    else:
+        results = [_classifier.classify(text) for text in texts]
+    return [
+        {
+            "category": result.category,
+            "confidence": result.confidence,
+            "criticality_score": result.criticality_score,
+            "priority": result.criticality_score,
+            "reasoning": result.reasoning,
+            "provider": result.provider,
+        }
+        for result in results
+    ]

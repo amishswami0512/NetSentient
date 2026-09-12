@@ -33,6 +33,20 @@ def test_create_traffic_valid(client):
     assert "delivery_percent" in data
     assert "latency_ms" in data
     assert "packet_loss_percent" in data
+    assert "throughput_mbps" in data
+
+
+def test_throughput_changes_with_the_requested_data_rate(client):
+    low = client.post(
+        "/api/traffic", json={"type": "video", "requested_mbps": 0.4}
+    ).get_json()
+    high = client.post(
+        "/api/traffic", json={"type": "video", "requested_mbps": 3.0}
+    ).get_json()
+
+    assert low["requested_mbps"] == 0.4
+    assert high["requested_mbps"] == 3.0
+    assert high["throughput_mbps"] > low["throughput_mbps"]
 
 
 def test_create_traffic_generates_server_side_id_and_ignores_client_id(client):

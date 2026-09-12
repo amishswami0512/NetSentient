@@ -1,25 +1,16 @@
-"""Priority-aware network metrics.
-
-This is where the "semantic routing" behavior actually lives: given a
-traffic item's priority and the current network state (congestion,
-semantic routing on/off), compute deterministic latency/loss/delivery
-numbers. No randomness -- every call with the same inputs returns the
-same output, which keeps a live demo reproducible.
-"""
 from datetime import datetime, timezone
+from hashlib import sha256
+from math import pi, sin
 from typing import Any
 
 from config import MAX_PRIORITY
 from services.state_service import state
 
-# (priority, delivery_percent) anchor points used to interpolate delivery
-# for congested traffic *with* semantic routing enabled. Priority 10
-# (emergency) stays almost fully protected; priority 1 (background) is
-# sacrificed almost entirely so higher-priority traffic gets through.
 _SEMANTIC_CONGESTED_ANCHORS: list[tuple[int, float]] = [
     (1, 5.0),
     (2, 15.0),
-    (5, 60.0),
+    # Tier 3 is deliberately capped at ~0.9 Mbps on the 2 Mbps congested link.
+    (5, 45.0),
     (9, 92.0),
     (10, 98.0),
 ]
@@ -40,13 +31,12 @@ def _interpolate_delivery(priority: int) -> float:
         if p_low <= priority <= p_high:
             ratio = (priority - p_low) / (p_high - p_low)
             return d_low + (d_high - d_low) * ratio
-    return anchors[-1][1]  # unreachable, satisfies type-checkers
+    return anchors[-1][1]
 
 
 def compute_metrics(
     priority: int, congestion: bool, semantic_routing_enabled: bool
 ) -> dict[str, Any]:
-    """Compute latency/loss/delivery/status for one traffic item."""
     if not congestion:
         delivery = round(99.5 - (MAX_PRIORITY - priority) * 0.3, 2)
         status = "normal"
@@ -59,8 +49,6 @@ def compute_metrics(
         else:
             status = "throttled"
     else:
-        # Baseline/fair allocation: congestion hurts everyone roughly
-        # equally, regardless of priority.
         delivery = round(60.0 + (priority - 5.5) * 1.0, 2)
         status = "fair"
 
@@ -73,6 +61,55 @@ def compute_metrics(
         "delivery_percent": delivery,
         "status": status,
     }
+
+
+def allocate_bandwidth(
+    traffic: list[dict[str, Any]], congestion: bool, semantic_routing_enabled: bool
+) -> dict[str, float]:
+    """Allocate link capacity using each flow's requested rate and QoS weight."""
+    capacity = _CONGESTION_BANDWIDTH_MBPS if congestion else _NO_CONGESTION_BANDWIDTH_MBPS
+    remaining = {
+        item["id"]: float(item.get("source_rate_mbps", item.get("requested_mbps", 0)))
+        for item in traffic
+    }
+    allocation = {traffic_id: 0.0 for traffic_id in remaining}
+    available = capacity
+
+    while remaining and available > 0:
+        weights = {
+            # Demand always affects a flow's share. QoS adds priority as a
+            # multiplier rather than replacing the actual requested rate.
+            item["id"]: float(item.get("source_rate_mbps", item.get("requested_mbps", 0))) * (
+                item["priority"] if semantic_routing_enabled else 1
+            )
+            for item in traffic
+            if item["id"] in remaining
+        }
+        total_weight = sum(weights.values())
+        satisfied = []
+        for traffic_id, demand in remaining.items():
+            share = available * weights[traffic_id] / total_weight
+            if demand <= share:
+                allocation[traffic_id] += demand
+                available -= demand
+                satisfied.append(traffic_id)
+        if not satisfied:
+            for traffic_id, demand in remaining.items():
+                allocation[traffic_id] += available * weights[traffic_id] / total_weight
+            break
+        for traffic_id in satisfied:
+            del remaining[traffic_id]
+
+    return {traffic_id: round(rate, 3) for traffic_id, rate in allocation.items()}
+
+
+def estimate_source_rate_mbps(traffic: dict[str, Any], timestamp: float) -> float:
+    """Estimate the live source rate from payload size and packet arrival activity."""
+    digest = sha256(traffic["id"].encode()).digest()
+    phase = digest[0] / 255 * 2 * pi
+    packets_per_second = 1_500 + digest[1] * 12
+    activity = 0.35 + 0.65 * ((sin(timestamp * 0.8 + phase) + 1) / 2)
+    return round(max(0.01, traffic["payload_bytes"] * 8 * packets_per_second * activity / 1_000_000), 3)
 
 
 def get_network_status() -> dict[str, Any]:

@@ -1,8 +1,3 @@
-"""Request validation helpers and the shared API error type.
-
-Every route funnels bad input through APIError so the error response
-shape (see app.py's error handler) is always identical.
-"""
 from typing import Any
 
 from flask import Request
@@ -11,12 +6,6 @@ from config import SUPPORTED_TRAFFIC_TYPES
 
 
 class APIError(Exception):
-    """Raised for any client-facing validation failure.
-
-    Caught centrally in app.py and turned into the standard
-    {"error": {"code": ..., "message": ...}} JSON response.
-    """
-
     def __init__(self, code: str, message: str, status_code: int = 400):
         super().__init__(message)
         self.code = code
@@ -25,12 +14,6 @@ class APIError(Exception):
 
 
 def parse_json_body(request: Request) -> dict[str, Any]:
-    """Parse the request body as a JSON object, or raise APIError.
-
-    Uses silent=True so Flask/Werkzeug never raises its own HTML-based
-    400 error for malformed JSON -- every bad-body case is normalized
-    into our own JSON error shape here.
-    """
     data = request.get_json(silent=True)
     if data is None:
         raise APIError(
@@ -73,6 +56,15 @@ def optional_string_field(data: dict[str, Any], field: str) -> str | None:
             400,
         )
     return value.strip()
+
+
+def optional_positive_number_field(data: dict[str, Any], field: str) -> float | None:
+    if field not in data or data[field] is None:
+        return None
+    value = data[field]
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+        raise APIError("INVALID_REQUEST", f"Field '{field}' must be a positive number.", 400)
+    return float(value)
 
 
 def require_traffic_type(data: dict[str, Any]) -> str:

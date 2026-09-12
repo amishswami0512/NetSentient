@@ -1,19 +1,13 @@
-"""Centralized configuration for the Semantic Router API.
-
-All "magic numbers" that matter for the demo (priorities, CORS origins,
-limits) live here so they are never scattered across route/service files.
-"""
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(Path(__file__).resolve().parent / ".env")
 
 SERVICE_NAME = "semantic-router-api"
 VERSION = "1.0.0"
 
-# Semantic priority mapping. Higher number = higher priority.
-# This is the single source of truth for priority scoring.
 PRIORITY_MAP = {
     "emergency": 10,
     "critical_sensor": 9,
@@ -22,7 +16,6 @@ PRIORITY_MAP = {
     "background": 1,
 }
 
-# Default human-readable labels used when a caller doesn't supply one.
 DEFAULT_LABELS = {
     "emergency": "Emergency Alert",
     "critical_sensor": "Critical Sensor",
@@ -44,7 +37,6 @@ class Config:
     DEBUG = os.environ.get("FLASK_DEBUG", "true").lower() == "true"
     HOST = os.environ.get("HOST", "0.0.0.0")
 
-    # Comma-separated list of allowed frontend origins for CORS.
     ALLOWED_ORIGINS = _parse_origins(
         os.environ.get(
             "ALLOWED_ORIGINS",
@@ -52,9 +44,6 @@ class Config:
         )
     )
 
-    # Reject request bodies larger than this (bytes). Protects the demo
-    # server from accidental/malicious huge payloads without adding
-    # real auth/security infrastructure.
     MAX_CONTENT_LENGTH_BYTES = int(
         os.environ.get("MAX_CONTENT_LENGTH_BYTES", str(64 * 1024))
     )

@@ -3,7 +3,8 @@ def test_demo_reset_creates_predefined_traffic(client):
     assert resp.status_code == 200
     data = resp.get_json()
     types = {t["type"] for t in data["traffic"]}
-    assert types == {"emergency", "critical_sensor", "video", "file"}
+    assert types == {"emergency", "critical_sensor", "video", "file", "background"}
+    assert len(data["traffic"]) == 40
     assert data["network"]["semantic_routing_enabled"] is True
     assert data["network"]["congestion"] is False
 
@@ -14,7 +15,7 @@ def test_demo_congest_enables_congestion_and_runs_simulation(client):
     assert resp.status_code == 200
     data = resp.get_json()
     assert data["network"]["congestion"] is True
-    assert len(data["results"]) == 4
+    assert len(data["results"]) == 40
 
 
 def test_demo_compare_shows_semantic_routing_benefit_for_emergency(client):
@@ -23,9 +24,9 @@ def test_demo_compare_shows_semantic_routing_benefit_for_emergency(client):
     assert resp.status_code == 200
     data = resp.get_json()
     assert "baseline" in data and "semantic" in data and "improvement" in data
-    assert len(data["baseline"]) == 4
-    assert len(data["semantic"]) == 4
-    assert len(data["improvement"]) == 4
+    assert len(data["baseline"]) == 40
+    assert len(data["semantic"]) == 40
+    assert len(data["improvement"]) == 40
 
     emergency_baseline = next(t for t in data["baseline"] if t["type"] == "emergency")
     emergency_semantic = next(t for t in data["semantic"] if t["type"] == "emergency")

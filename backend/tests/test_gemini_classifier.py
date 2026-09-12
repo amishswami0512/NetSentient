@@ -8,9 +8,12 @@ GEMINI_API_KEY set.
 import json
 from types import SimpleNamespace
 
+import pytest
+
 from services.classifier_service import (
+    ClassifierUnavailableError,
     GeminiClassifier,
-    RuleBasedClassifier,
+    UnconfiguredGeminiClassifier,
     _build_default_classifier,
 )
 
@@ -33,49 +36,76 @@ class _FakeGeminiClient:
         self.models = _FakeModels(response_text, raise_error)
 
 
-def test_gemini_classifier_maps_tier_1_to_emergency():
-    client = _FakeGeminiClient(response_text=json.dumps({"tier": 1, "reason": "fire detected"}))
+def test_gemini_classifier_uses_gemini_category_and_criticality():
+    client = _FakeGeminiClient(response_text=json.dumps({
+        "category": "emergency",
+        "criticality_score": 10,
+        "confidence": 0.97,
+        "reason": "fire detected",
+    }))
     classifier = GeminiClassifier(client)
-    category, confidence = classifier.classify("Building on fire, evacuate now")
-    assert category == "emergency"
-    assert confidence == GeminiClassifier.CONFIDENCE
+    result = classifier.classify("Building on fire, evacuate now")
+    assert result.category == "emergency"
+    assert result.criticality_score == 10
+    assert result.confidence == 0.97
+    assert result.reasoning == "fire detected"
+    assert result.provider == "gemini"
 
 
-def test_gemini_classifier_maps_all_tiers():
-    expected = {1: "emergency", 2: "critical_sensor", 3: "video", 4: "background"}
-    for tier, category in expected.items():
-        client = _FakeGeminiClient(response_text=json.dumps({"tier": tier, "reason": "x"}))
+def test_gemini_classifier_preserves_one_decimal_criticality():
+    client = _FakeGeminiClient(response_text=json.dumps({
+        "category": "video",
+        "criticality_score": 3.7,
+        "confidence": 0.81,
+        "reason": "routine video call",
+    }))
+    result = GeminiClassifier(client).classify("Routine team video call")
+    assert result.criticality_score == 3.7
+
+
+def test_gemini_classifier_accepts_gemini_scores_without_tier_mapping():
+    expected = {
+        "emergency": 10,
+        "critical_sensor": 8,
+        "video": 5,
+        "background": 2,
+    }
+    for category, score in expected.items():
+        client = _FakeGeminiClient(response_text=json.dumps({
+            "category": category,
+            "criticality_score": score,
+            "confidence": 0.8,
+            "reason": "x",
+        }))
         classifier = GeminiClassifier(client)
-        result_category, _ = classifier.classify(f"payload for tier {tier}")
-        assert result_category == category
+        result = classifier.classify(f"payload for {category}")
+        assert result.category == category
+        assert result.criticality_score == score
 
 
-def test_gemini_classifier_falls_back_to_rule_based_on_api_error():
+def test_gemini_classifier_reports_api_error_instead_of_using_keyword_fallback():
     client = _FakeGeminiClient(raise_error=True)
     classifier = GeminiClassifier(client)
-    category, confidence = classifier.classify("large file upload in progress")
 
-    expected_category, expected_confidence = RuleBasedClassifier().classify(
-        "large file upload in progress"
-    )
-    assert category == expected_category
-    assert confidence == expected_confidence
+    with pytest.raises(ClassifierUnavailableError):
+        classifier.classify("large file upload in progress")
 
 
-def test_gemini_classifier_falls_back_on_malformed_response():
+def test_gemini_classifier_reports_malformed_response():
     client = _FakeGeminiClient(response_text="not valid json")
     classifier = GeminiClassifier(client)
-    category, confidence = classifier.classify("ambulance emergency alert")
 
-    expected_category, expected_confidence = RuleBasedClassifier().classify(
-        "ambulance emergency alert"
-    )
-    assert category == expected_category
-    assert confidence == expected_confidence
+    with pytest.raises(ClassifierUnavailableError):
+        classifier.classify("ambulance emergency alert")
 
 
 def test_gemini_classifier_caches_repeat_calls():
-    client = _FakeGeminiClient(response_text=json.dumps({"tier": 4, "reason": "backup job"}))
+    client = _FakeGeminiClient(response_text=json.dumps({
+        "category": "background",
+        "criticality_score": 2,
+        "confidence": 0.8,
+        "reason": "backup job",
+    }))
     classifier = GeminiClassifier(client)
 
     classifier.classify("nightly backup running")
@@ -84,9 +114,9 @@ def test_gemini_classifier_caches_repeat_calls():
     assert client.models.call_count == 1
 
 
-def test_default_classifier_is_rule_based_without_api_key(monkeypatch):
+def test_default_classifier_requires_gemini_without_api_key(monkeypatch):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-    assert isinstance(_build_default_classifier(), RuleBasedClassifier)
+    assert isinstance(_build_default_classifier(), UnconfiguredGeminiClassifier)
 
 
 def test_default_classifier_uses_gemini_when_api_key_present(monkeypatch):

@@ -1,10 +1,7 @@
-"""Flask application factory for the Semantic Router API.
-
-Run locally with: python app.py
-"""
 import logging
+from pathlib import Path
 
-from flask import Flask, jsonify
+from flask import Flask, jsonify, send_from_directory
 from flask_cors import CORS
 
 from config import Config
@@ -17,7 +14,8 @@ from routes.traffic import traffic_bp
 
 
 def create_app() -> Flask:
-    app = Flask(__name__)
+    frontend_dir = Path(__file__).resolve().parent.parent / "frontend"
+    app = Flask(__name__, static_folder=str(frontend_dir), static_url_path="")
     app.config["MAX_CONTENT_LENGTH"] = Config.MAX_CONTENT_LENGTH_BYTES
 
     logging.basicConfig(level=logging.INFO)
@@ -29,6 +27,10 @@ def create_app() -> Flask:
     app.register_blueprint(classify_bp)
     app.register_blueprint(simulation_bp)
     app.register_blueprint(demo_bp)
+
+    @app.get("/")
+    def serve_frontend():
+        return send_from_directory(app.static_folder, "index.html")
 
     @app.errorhandler(APIError)
     def handle_api_error(err: APIError):
@@ -70,7 +72,6 @@ def create_app() -> Flask:
         ), 500
 
     return app
-
 
 app = create_app()
 

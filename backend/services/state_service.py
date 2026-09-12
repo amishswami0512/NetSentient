@@ -1,15 +1,4 @@
-"""In-memory state manager for the hackathon prototype.
-
-Holds all mutable demo state (active traffic, congestion flag, semantic
-routing flag, ID counters) behind one object instead of scattering
-module-level globals across the codebase.
-
-NOTE: State is process-local and volatile -- restarting Flask wipes it.
-Use POST /api/simulation/reset or POST /api/demo/reset to get back to a
-clean slate without restarting the server.
-"""
 from typing import Any
-
 from config import PRIORITY_MAP
 
 
@@ -28,16 +17,29 @@ class StateService:
         self._traffic_seq = 0
         self._simulation_seq = 0
 
-    # -- traffic -----------------------------------------------------
-    def add_traffic(self, traffic_type: str, label: str) -> dict[str, Any]:
+    def add_traffic(
+        self,
+        traffic_type: str,
+        label: str,
+        criticality_score: float | None = None,
+        classification: dict[str, Any] | None = None,
+        requested_mbps: float | None = None,
+    ) -> dict[str, Any]:
         self._traffic_seq += 1
         traffic_id = f"traffic-{self._traffic_seq:03d}"
+        score = criticality_score if criticality_score is not None else PRIORITY_MAP[traffic_type]
         entry = {
             "id": traffic_id,
             "type": traffic_type,
             "label": label,
-            "priority": PRIORITY_MAP[traffic_type],
+            "priority": score,
+            "criticality_score": score,
+            "payload_bytes": len(label.encode("utf-8")),
         }
+        if requested_mbps is not None:
+            entry["requested_mbps"] = requested_mbps
+        if classification:
+            entry.update(classification)
         self._traffic[traffic_id] = entry
         return entry
 
@@ -47,25 +49,21 @@ class StateService:
     def clear_traffic(self) -> None:
         self._traffic = {}
 
-    # -- congestion ----------------------------------------------------
     def set_congestion(self, enabled: bool) -> None:
         self._congestion = enabled
 
     def get_congestion(self) -> bool:
         return self._congestion
 
-    # -- semantic routing ----------------------------------------------
     def set_semantic_routing(self, enabled: bool) -> None:
         self._semantic_routing_enabled = enabled
 
     def get_semantic_routing(self) -> bool:
         return self._semantic_routing_enabled
 
-    # -- simulation ------------------------------------------------------
     def next_simulation_id(self) -> str:
         self._simulation_seq += 1
         return f"sim-{self._simulation_seq:03d}"
 
 
-# Single shared instance used across routes/services for this process.
 state = StateService()

@@ -6,7 +6,8 @@ def test_classify_critical_sensor_input(client):
     assert resp.status_code == 200
     data = resp.get_json()
     assert data["category"] == "critical_sensor"
-    assert data["priority"] == 9
+    assert 6 <= data["criticality_score"] <= 8
+    assert data["priority"] == data["criticality_score"]
     assert 0.0 < data["confidence"] <= 1.0
 
 
