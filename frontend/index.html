@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NetSentient — Autonomous QoS Dashboard</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen p-6 font-sans">
+  
+  <!-- Top Header -->
+  <header class="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center pb-6 mb-6 border-b border-slate-800 gap-4">
+    <div>
+      <h1 class="text-3xl font-bold tracking-tight text-white flex items-center gap-2">
+        <span class="inline-block w-3 h-3 bg-emerald-500 rounded-full animate-ping"></span>
+        NetSentient
+      </h1>
+      <p class="text-sm text-slate-400 mt-1">Autonomous Context-Aware Traffic Management</p>
+    </div>
+    
+    <!-- Controls -->
+    <div class="flex items-center gap-4">
+      <button id="btn-congestion" class="px-5 py-2.5 rounded-lg bg-red-600 hover:bg-red-500 text-white font-semibold shadow-lg transition duration-200">
+        Simulate Congestion: OFF
+      </button>
+      <button id="btn-qos" class="px-5 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold shadow-lg transition duration-200">
+        AI Priority (QoS): OFF
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Container -->
+  <main class="max-w-7xl mx-auto space-y-6">
+    
+    <!-- Metrics Cards Grid -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      
+      <!-- Emergency -->
+      <div class="bg-slate-800/80 border border-red-500/30 rounded-xl p-5 shadow-sm">
+        <div class="text-xs font-bold text-red-400 uppercase tracking-wider">Tier 1: Emergency</div>
+        <div class="text-3xl font-extrabold mt-2 text-white" id="val-emergency">0 <span class="text-sm font-normal text-slate-400">Mbps</span></div>
+        <div class="text-xs text-slate-400 mt-1">ICU Telemetry / Crisis Alerts</div>
+      </div>
+
+      <!-- Sensor -->
+      <div class="bg-slate-800/80 border border-amber-500/30 rounded-xl p-5 shadow-sm">
+        <div class="text-xs font-bold text-amber-400 uppercase tracking-wider">Tier 2: Sensor Data</div>
+        <div class="text-3xl font-extrabold mt-2 text-white" id="val-sensor">0 <span class="text-sm font-normal text-slate-400">Mbps</span></div>
+        <div class="text-xs text-slate-400 mt-1">Industrial IoT Telemetry</div>
+      </div>
+
+      <!-- Video -->
+      <div class="bg-slate-800/80 border border-blue-500/30 rounded-xl p-5 shadow-sm">
+        <div class="text-xs font-bold text-blue-400 uppercase tracking-wider">Tier 3: Video Stream</div>
+        <div class="text-3xl font-extrabold mt-2 text-white" id="val-video">0 <span class="text-sm font-normal text-slate-400">Mbps</span></div>
+        <div class="text-xs text-slate-400 mt-1">Real-time Video / Comms</div>
+      </div>
+
+      <!-- File Download -->
+      <div class="bg-slate-800/80 border border-slate-600/30 rounded-xl p-5 shadow-sm">
+        <div class="text-xs font-bold text-slate-400 uppercase tracking-wider">Tier 4: Bulk File Download</div>
+        <div class="text-3xl font-extrabold mt-2 text-white" id="val-file">0 <span class="text-sm font-normal text-slate-400">Mbps</span></div>
+        <div class="text-xs text-slate-400 mt-1">Background Data Transfers</div>
+      </div>
+
+    </div>
+
+    <!-- Chart Section -->
+    <div class="bg-slate-800/80 border border-slate-700/50 rounded-xl p-6 shadow-xl">
+      <h2 class="text-lg font-semibold text-white mb-4">Live Traffic Distribution</h2>
+      <div class="h-80 w-full">
+        <canvas id="trafficChart"></canvas>
+      </div>
+    </div>
+
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
