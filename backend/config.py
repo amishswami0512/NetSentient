@@ -185,3 +185,18 @@ class Config:
     # (ranked by packet count) -- keeps a huge pcap from turning one
     # request into thousands of Gemini calls / traffic entries.
     CAPTURE_MAX_FLOWS = int(os.environ.get("CAPTURE_MAX_FLOWS", "25"))
+
+    # Real traffic shaping (services/enforcement_service.py). False by
+    # default: every /api/enforce/* call is a dry run (returns the
+    # tc/iptables commands without running them) until this is
+    # explicitly turned on. This is a real safety default, not just a
+    # dev convenience -- enabling it reconfigures a live network
+    # interface, so it should never happen from a config file default.
+    ENFORCEMENT_ENABLED = os.environ.get("ENFORCEMENT_ENABLED", "false").lower() == "true"
+    # Interface enforcement rules apply to. Defaults to loopback, which
+    # never carries real external traffic -- safe to leave enabled
+    # against by accident. Point this at a real interface (e.g. eth0)
+    # only once you mean to shape real traffic on it.
+    ENFORCEMENT_INTERFACE = os.environ.get("ENFORCEMENT_INTERFACE") or "lo"
+    # Total bandwidth budget (Mbps) the priority tiers divide up.
+    ENFORCEMENT_BANDWIDTH_MBPS = float(os.environ.get("ENFORCEMENT_BANDWIDTH_MBPS", "10"))

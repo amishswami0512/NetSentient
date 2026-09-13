@@ -12,6 +12,7 @@ from models.schemas import APIError
 from routes.capture import capture_bp
 from routes.classify import classify_bp
 from routes.demo import demo_bp
+from routes.enforce import enforce_bp
 from routes.health import health_bp
 from routes.simulation import simulation_bp
 from routes.traffic import traffic_bp
@@ -31,6 +32,7 @@ def create_app() -> Flask:
     app.register_blueprint(simulation_bp)
     app.register_blueprint(demo_bp)
     app.register_blueprint(capture_bp)
+    app.register_blueprint(enforce_bp)
 
     @app.errorhandler(APIError)
     def handle_api_error(err: APIError):
