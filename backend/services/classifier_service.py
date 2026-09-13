@@ -45,16 +45,30 @@ class RuleBasedClassifier(BaseClassifier):
             "temperature", "pressure", "threshold", "overheating",
             "machine failure", "collision", "autonomous vehicle",
         ],
+        "transactional": [
+            "transaction", "stock trade", "trade execution", "payment",
+            "point-of-sale", "point of sale", "credit card", "authorization token",
+            "order execution", "purchase",
+        ],
         "real_time": [
             "real-time", "real time", "live monitoring", "interactive control",
             "control signal", "control loop", "remote control", "live dashboard",
             "telemetry control",
         ],
+        "voice_chat": [
+            "voip", "sip", "voice call", "voice chat", "phone call", "dispatcher call",
+        ],
         "video": [
             "video", "call", "stream", "conference", "zoom", "meeting",
+            # Well-known video/streaming hostnames -- so a scanned
+            # connection's label ("chrome connection to youtube.com on
+            # port 443") still gets a sensible category in fallback
+            # mode, not just whatever port 443 happens to map to.
+            "youtube", "netflix", "twitch", "hulu", "disneyplus", "primevideo",
         ],
         "file": [
             "file", "upload", "download", "transfer", "document", "attachment",
+            "dropbox", "onedrive", "icloud",
         ],
         "background": [
             "update", "background", "sync", "backup", "telemetry", "patch",

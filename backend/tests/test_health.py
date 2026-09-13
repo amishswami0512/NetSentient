@@ -1,3 +1,10 @@
+def test_root_returns_api_info(client):
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert b"NetSentient" in resp.data
+    assert resp.mimetype == "text/html"
+
+
 def test_health_returns_200_and_expected_shape(client):
     resp = client.get("/api/health")
     assert resp.status_code == 200

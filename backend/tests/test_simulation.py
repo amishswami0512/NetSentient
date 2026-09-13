@@ -4,6 +4,9 @@ def test_enable_congestion(client):
     data = resp.get_json()
     assert data["congestion"] is True
     assert data["bandwidth_mbps"] < 10
+    assert "latency_ms" in data
+    assert data["measurement_source"] in ("measured", "fallback")
+    assert data["measurement_ok"] == (data["measurement_source"] == "measured")
 
 
 def test_disable_congestion(client):
@@ -78,6 +81,22 @@ def test_semantic_routing_changes_simulation_behavior_under_congestion(client):
     gap_with = emergency_with["delivery_percent"] - file_with["delivery_percent"]
     gap_without = emergency_without["delivery_percent"] - file_without["delivery_percent"]
     assert gap_with > gap_without
+
+
+def test_tier_two_delivery_stays_close_to_tier_one_under_congestion():
+    from services.routing_service import _interpolate_delivery
+    from services.routing_service import compute_metrics
+
+    emergency_metrics = compute_metrics(8.7, True, True, "emergency")
+    sensor_metrics = compute_metrics(6.2, True, True, "critical_sensor")
+    video_metrics = compute_metrics(5.7, True, True, "video")
+
+    assert emergency_metrics["delivery_percent"] == _interpolate_delivery(10)
+    assert emergency_metrics["delivery_percent"] > sensor_metrics["delivery_percent"] > video_metrics["delivery_percent"]
+    assert sensor_metrics["delivery_percent"] > 70
+    assert emergency_metrics["packet_loss_percent"] < 1
+    assert sensor_metrics["packet_loss_percent"] < 5
+    assert sensor_metrics["latency_ms"] < 100
 
 
 def test_simulation_reset_clears_state(client):

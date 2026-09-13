@@ -21,7 +21,9 @@ VERSION = "1.0.0"
 PRIORITY_MAP = {
     "emergency": 10,
     "critical_sensor": 9,
+    "transactional": 8,
     "real_time": 7,
+    "voice_chat": 5,
     "video": 5,
     "file": 2,
     "background": 1,
@@ -31,7 +33,9 @@ PRIORITY_MAP = {
 DEFAULT_LABELS = {
     "emergency": "Emergency Alert",
     "critical_sensor": "Critical Sensor",
+    "transactional": "Financial Transaction",
     "real_time": "Live Monitoring Feed",
+    "voice_chat": "Voice Call",
     "video": "Video Call",
     "file": "File Transfer",
     "background": "Background Update",
@@ -89,7 +93,18 @@ PRIORITY_WEIGHTS = {
 CATEGORY_PRIORITY_BOUNDS = {
     "emergency": (7.5, 10.0),
     "critical_sensor": (1.0, 10.0),
+    # Financial operations (stock trade execution, payment authorization):
+    # high floor because a delayed/dropped transaction has real financial
+    # and legal consequence, but capped below critical_sensor/emergency --
+    # this is about money, not life-safety.
+    "transactional": (5.0, 9.0),
     "real_time": (2.0, 8.5),
+    # Same ceiling as video (real-time-ness alone isn't high-stakes), but
+    # a higher floor: voice degrades noticeably faster than video under
+    # jitter/packet loss, so even a mundane call needs a live delivery
+    # guarantee video doesn't (a video call can drop frames far more
+    # gracefully than a voice call can drop syllables).
+    "voice_chat": (2.0, 7.5),
     "video": (1.0, 7.5),
     "file": (0.3, 6.0),
     "background": (0.0, 3.5),
@@ -111,7 +126,9 @@ LOW_CONFIDENCE_THRESHOLD = 0.55
 FALLBACK_SEMANTIC_FACTORS = {
     "emergency": {"urgency": 0.95, "consequence": 0.95, "latency_sensitivity": 0.85, "reliability_requirement": 0.95},
     "critical_sensor": {"urgency": 0.65, "consequence": 0.70, "latency_sensitivity": 0.55, "reliability_requirement": 0.75},
+    "transactional": {"urgency": 0.75, "consequence": 0.80, "latency_sensitivity": 0.60, "reliability_requirement": 0.85},
     "real_time": {"urgency": 0.55, "consequence": 0.45, "latency_sensitivity": 0.80, "reliability_requirement": 0.55},
+    "voice_chat": {"urgency": 0.40, "consequence": 0.30, "latency_sensitivity": 0.75, "reliability_requirement": 0.45},
     "video": {"urgency": 0.35, "consequence": 0.30, "latency_sensitivity": 0.65, "reliability_requirement": 0.45},
     "file": {"urgency": 0.15, "consequence": 0.15, "latency_sensitivity": 0.10, "reliability_requirement": 0.35},
     "background": {"urgency": 0.05, "consequence": 0.05, "latency_sensitivity": 0.05, "reliability_requirement": 0.20},
@@ -157,23 +174,83 @@ class Config:
     # lower default here would make every real Gemini call fail
     # outright, regardless of how valid the API key is.
     GEMINI_TIMEOUT_SECONDS = float(os.environ.get("GEMINI_TIMEOUT_SECONDS", "12.0"))
+    # Keep the HTTP request responsive even if Gemini is slow. The SDK keeps
+    # its API-compatible timeout above, while the service falls back sooner.
+    GEMINI_REQUEST_BUDGET_SECONDS = float(
+        os.environ.get("GEMINI_REQUEST_BUDGET_SECONDS", "4.0")
+    )
 
-    # Real local network measurement. The download is deliberately small and
-    # cached so it does not run on every dashboard refresh.
-    SPEED_TEST_URL = os.environ.get(
-        "SPEED_TEST_URL",
-        "https://speed.cloudflare.com/__down?bytes=2000000",
+    # Where active traffic / congestion / routing state is persisted
+    # (see services/state_service.py) -- a real SQLite database (WAL
+    # mode), not a JSON snapshot, so it's transactional and safe to
+    # share across multiple worker processes (e.g. gunicorn). Defaults
+    # to a path next to this file so it resolves correctly regardless
+    # of the process's current working directory.
+    #
+    # Uses `or` rather than os.environ.get(key, default): .env.example
+    # ships this key present but blank (meaning "use the default"), and
+    # os.environ.get's default only kicks in when the key is *absent* --
+    # a present-but-empty value would otherwise resolve to "", the same
+    # class of bug GEMINI_TIMEOUT_SECONDS hit earlier.
+    STATE_DB_PATH = os.environ.get("STATE_DB_PATH") or os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "data", "state.db"
     )
-    SPEED_TEST_TIMEOUT_SECONDS = float(
-        os.environ.get("SPEED_TEST_TIMEOUT_SECONDS", "5.0")
+
+    # Directory POST /api/capture/analyze is allowed to read pcap files
+    # from (services/capture_service.py). Requests may only reference
+    # files inside this directory -- see routes/capture.py's path
+    # resolution -- so a client can never read arbitrary files off disk
+    # via a crafted pcap_path.
+    CAPTURES_DIR = os.environ.get("CAPTURES_DIR") or os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "data", "captures"
     )
-    SPEED_TEST_MAX_BYTES = int(os.environ.get("SPEED_TEST_MAX_BYTES", "2000000"))
-    SPEED_TEST_CACHE_SECONDS = float(
-        os.environ.get("SPEED_TEST_CACHE_SECONDS", "30.0")
+    # Cap on how many distinct flows a single capture analysis returns
+    # (ranked by packet count) -- keeps a huge pcap from turning one
+    # request into thousands of Gemini calls / traffic entries.
+    CAPTURE_MAX_FLOWS = int(os.environ.get("CAPTURE_MAX_FLOWS", "25"))
+
+    # Real traffic shaping (services/enforcement_service.py). False by
+    # default: every /api/enforce/* call is a dry run (returns the
+    # tc/iptables commands without running them) until this is
+    # explicitly turned on. This is a real safety default, not just a
+    # dev convenience -- enabling it reconfigures a live network
+    # interface, so it should never happen from a config file default.
+    ENFORCEMENT_ENABLED = os.environ.get("ENFORCEMENT_ENABLED", "false").lower() == "true"
+    # Interface enforcement rules apply to. Defaults to loopback, which
+    # never carries real external traffic -- safe to leave enabled
+    # against by accident. Point this at a real interface (e.g. eth0)
+    # only once you mean to shape real traffic on it.
+    ENFORCEMENT_INTERFACE = os.environ.get("ENFORCEMENT_INTERFACE") or "lo"
+    # Total bandwidth budget (Mbps) the priority tiers divide up.
+    ENFORCEMENT_BANDWIDTH_MBPS = float(os.environ.get("ENFORCEMENT_BANDWIDTH_MBPS", "10"))
+
+    # Comma-separated API keys accepted as `Authorization: Bearer <key>`
+    # on every /api/* route except /api/health. Empty (default) means
+    # no auth is required -- backward compatible with every earlier
+    # section of this README, and appropriate for local development.
+    # Set this before exposing the API beyond localhost.
+    API_KEYS = frozenset(
+        key.strip() for key in os.environ.get("API_KEYS", "").split(",") if key.strip()
     )
-    SPEED_TEST_FALLBACK_BANDWIDTH_MBPS = float(
-        os.environ.get("SPEED_TEST_FALLBACK_BANDWIDTH_MBPS", "10.0")
-    )
-    SPEED_TEST_FALLBACK_LATENCY_MS = float(
-        os.environ.get("SPEED_TEST_FALLBACK_LATENCY_MS", "20.0")
-    )
+
+    # Background live-connection scanning (services/scan_poller.py):
+    # periodically re-runs network_scan_service.scan_active_connections()
+    # so a newly opened site/app shows up as traffic automatically,
+    # without anyone calling POST /api/traffic/scan by hand. On by
+    # default -- unlike ENFORCEMENT_ENABLED, this only reads local
+    # connection info and classifies it, it never touches the network
+    # itself, so there's no safety reason to default it off.
+    SCAN_POLL_ENABLED = os.environ.get("SCAN_POLL_ENABLED", "true").lower() == "true"
+    SCAN_POLL_INTERVAL_SECONDS = float(os.environ.get("SCAN_POLL_INTERVAL_SECONDS", "5"))
+
+    # Live TLS SNI sniffing (services/live_sniff_service.py): reads the
+    # real hostname straight out of outbound HTTPS handshakes instead
+    # of relying on reverse DNS, which is unreliable for exactly the
+    # sites worth naming correctly (see that module's docstring). Off
+    # by default -- unlike scan polling, this needs raw packet access
+    # (root/administrator, same requirement as tcpdump), so it must be
+    # deliberately opted into, not assumed safe for every environment.
+    SNI_SNIFF_ENABLED = os.environ.get("SNI_SNIFF_ENABLED", "false").lower() == "true"
+    # Interface to sniff on. Unset (default) auto-detects via scapy's
+    # own default-route interface detection.
+    SNI_SNIFF_INTERFACE = os.environ.get("SNI_SNIFF_INTERFACE") or None

@@ -95,9 +95,13 @@ def analyze(text: str, client, model: str | None = None, timeout_seconds: float 
         # already bound the network call, but this wrapper-level timeout
         # guarantees this function never blocks the request thread
         # indefinitely regardless of SDK behavior.
-        response = future.result(timeout=timeout_seconds + 1.0)
+        request_budget = min(
+            timeout_seconds + 1.0,
+            Config.GEMINI_REQUEST_BUDGET_SECONDS,
+        )
+        response = future.result(timeout=request_budget)
     except concurrent.futures.TimeoutError:
-        logger.warning("Gemini call timed out after %.1fs", timeout_seconds)
+        logger.warning("Gemini call exceeded the %.1fs request budget", request_budget)
         future.cancel()
         return None
     except Exception:

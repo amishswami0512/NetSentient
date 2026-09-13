@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 import pytest
 
 
@@ -9,11 +11,15 @@ def test_network_status_shape(client):
         "congestion",
         "load_percent",
         "bandwidth_mbps",
+        "latency_ms",
+        "measurement_ok",
+        "measurement_source",
         "semantic_routing_enabled",
         "active_connections",
         "timestamp",
     ):
         assert field in data
+    assert data["measurement_source"] in ("measured", "fallback")
 
 
 def test_get_traffic_empty_initially(client):
@@ -97,3 +103,37 @@ def test_emergency_traffic_has_higher_priority_than_file_and_background(client):
 
     assert emergency["priority"] > file_["priority"]
     assert emergency["priority"] > background["priority"]
+
+
+def test_scan_traffic_classifies_via_real_pipeline_not_port_guess(client):
+    # A youtube.com connection on port 443 -- previously this would
+    # have been categorized purely by port number (443 -> "video"
+    # unconditionally). Now it goes through the same semantic
+    # pipeline as everything else, so the RuleBasedClassifier's
+    # "youtube" keyword (added specifically for this) is what actually
+    # drives the category, not the port.
+    fake_connections = [
+        {"label": "chrome connection to youtube.com on port 443", "hostname": "youtube.com", "port": "443"},
+    ]
+    with patch("services.network_scan_service.scan_active_connections", return_value=fake_connections):
+        resp = client.post("/api/traffic/scan")
+
+    assert resp.status_code == 201
+    data = resp.get_json()
+    assert data["count"] == 1
+    assert "scanned_at" in data
+    assert len(data["traffic"]) == 1
+    entry = data["traffic"][0]
+    assert entry["type"] == "video"
+    assert entry["label"] == "chrome connection to youtube.com on port 443"
+    assert "priority" in entry and "delivery_percent" in entry
+
+
+def test_scan_traffic_with_no_connections_returns_empty_list(client):
+    with patch("services.network_scan_service.scan_active_connections", return_value=[]):
+        resp = client.post("/api/traffic/scan")
+    assert resp.status_code == 201
+    data = resp.get_json()
+    assert data["traffic"] == []
+    assert data["count"] == 0
+    assert "scanned_at" in data
