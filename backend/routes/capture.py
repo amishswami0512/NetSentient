@@ -50,10 +50,10 @@ def analyze_capture():
 
     traffic = []
     for flow in flows:
-        entry = state.add_captured_traffic(flow["description"])
+        entry = state.add_captured_traffic(flow["description"], cache_key=flow["signature"])
         traffic.append({
             **entry,
-            "flow_metadata": {k: v for k, v in flow.items() if k != "description"},
+            "flow_metadata": {k: v for k, v in flow.items() if k not in ("description", "signature")},
         })
 
     return jsonify({"flows_processed": len(traffic), "traffic": traffic}), 200

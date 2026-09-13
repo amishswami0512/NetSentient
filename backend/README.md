@@ -127,6 +127,8 @@ All optional — see `.env.example`. Copy it to `.env` to override defaults.
 | `GEMINI_API_KEY` | *(empty)* | Optional. If set, `POST /api/classify` and traffic creation use real Gemini semantic analysis. If unset, the deterministic fallback is used and the app works identically otherwise. |
 | `GEMINI_MODEL` | `gemini-3.5-flash-lite` | Gemini model used for semantic analysis (fast/cheap, appropriate for structured classification) |
 | `GEMINI_TIMEOUT_SECONDS` | `12.0` | Hard cap on a single Gemini call before falling back. Must be >= 10 -- the Gemini API server rejects a shorter deadline outright regardless of API key validity |
+| `API_KEYS` | *(empty)* | Comma-separated. If set, every `/api/*` route except `/api/health` requires `Authorization: Bearer <key>`. Unset means no auth. See section 14 |
+| `ENFORCEMENT_ENABLED` | `false` | If true, `POST /api/enforce/apply` actually runs tc/iptables commands instead of a dry run. See section 9 |
 
 **CORS note:** `ALLOWED_ORIGINS` is never `*`. If your dashboard runs on
 a different port, add it to this list (comma-separated) in your `.env`.
@@ -522,13 +524,25 @@ you extend it, keep it that way.
 
 ## 13. Known Limitations
 
-- State persists to a JSON file (`Config.STATE_FILE_PATH`, default
-  `backend/data/state.json`) so a restart survives — but it's a
-  whole-file overwrite per mutation with no concurrent-write safety,
-  not a real database. Use `POST /api/simulation/reset` or
-  `POST /api/demo/reset` for an explicit clean slate.
-- Single-process, no auth — by design, for a hackathon demo, not
-  production use.
+- State persists to a real SQLite database (`Config.STATE_DB_PATH`,
+  WAL mode), safe across process restarts and multiple worker
+  processes sharing the file. It's still a single-file database, not a
+  networked multi-writer one like Postgres — appropriate at the scale
+  this app runs at, not infinitely scalable. Use
+  `POST /api/simulation/reset` or `POST /api/demo/reset` for an
+  explicit clean slate.
+- `Config.API_KEYS` gates every `/api/*` route except `/api/health`,
+  but it's a single shared secret per key, not per-user auth/RBAC —
+  fine for gating access to the API as a whole, not for multi-tenant
+  access control.
+- Gunicorn's worker-process model (see `Dockerfile`) means each worker
+  has its own in-memory Gemini result cache (`services/semantic_service.py`'s
+  `PayloadCache`) — the same classification can still be a genuine
+  Gemini call in each of N workers before all of them have it cached,
+  since the cache isn't shared across processes. A shared cache (e.g.
+  Redis) would fix this but adds an external service dependency this
+  project doesn't otherwise need; worth it at real production traffic
+  volume, not implemented here.
 - `POST /api/capture/analyze` and `POST /api/enforce/apply` exist
   side by side but aren't chained — classifying a captured flow
   doesn't automatically enforce it. See sections 8 and 9.
@@ -557,3 +571,44 @@ you extend it, keep it that way.
   not by Gemini's own consistency. A brand-new phrasing of the same
   underlying situation could, in principle, get a slightly different
   score from Gemini on different runs.
+
+## 14. Production Deployment
+
+**Auth.** Set `API_KEYS` (comma-separated) in `.env` and every
+`/api/*` route except `/api/health` requires
+`Authorization: Bearer <key>`. Unset (default) means no auth, same as
+every earlier section of this README — set it before exposing the API
+beyond localhost.
+
+```bash
+curl -X POST http://localhost:5000/api/classify \
+  -H "Authorization: Bearer $YOUR_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"input": "Ambulance emergency alert dispatched"}'
+```
+
+**Running it for real**, instead of `python app.py` (Flask's dev
+server, single-threaded, not meant to be exposed beyond localhost):
+
+```bash
+# Directly with gunicorn:
+pip install -r requirements.txt
+FLASK_DEBUG=false gunicorn --bind 0.0.0.0:5000 --workers 4 --timeout 30 app:app
+
+# Or with Docker:
+docker compose up --build
+```
+
+The `Dockerfile`/`docker-compose.yml` mount `./data` as a volume, so
+the SQLite state database and any pcap captures survive a container
+restart. Real enforcement (`ENFORCEMENT_ENABLED=true` against a real
+interface) needs the container to see and modify a real host
+interface — `docker-compose.yml` has `network_mode: host` +
+`cap_add: NET_ADMIN` commented out for exactly that case; it's off by
+default because granting NET_ADMIN is a real capability grant, not
+something a compose file should hand out silently.
+
+Everything above was verified to actually run this way during
+development: gunicorn with multiple workers serving real requests, and
+the tc/iptables commands in section 9 executed against a live
+interface — not just described.

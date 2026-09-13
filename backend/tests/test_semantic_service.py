@@ -167,6 +167,41 @@ def test_descriptive_sentence_with_a_keyword_word_still_uses_gemini():
         _restore()
 
 
+def test_cache_key_lets_distinct_text_share_one_gemini_call():
+    # Simulates services/capture_service.py's use case: two flow
+    # observations of the same host produce different description text
+    # (different packet/byte counts) but share a stable signature --
+    # passing that signature as cache_key must make the second call
+    # reuse the first's result instead of calling Gemini again.
+    client = _client_for(_analysis(category="video"))
+    semantic_service.set_client(client)
+    try:
+        first = semantic_service.analyze(
+            "Encrypted TLS session to 'zoom.us' on port 443, 12 packets over 1.0s",
+            cache_key="tls:zoom.us:443",
+        )
+        second = semantic_service.analyze(
+            "Encrypted TLS session to 'zoom.us' on port 443, 9001 packets over 84.2s",
+            cache_key="tls:zoom.us:443",
+        )
+        assert first == second
+        assert client.models.call_count == 1
+    finally:
+        _restore()
+
+
+def test_cache_key_none_falls_back_to_keying_on_text_itself():
+    client = _client_for(_analysis())
+    semantic_service.set_client(client)
+    try:
+        text = "some payload without an explicit cache key"
+        semantic_service.analyze(text)
+        semantic_service.analyze(text)
+        assert client.models.call_count == 1
+    finally:
+        _restore()
+
+
 def test_switching_client_keeps_common_keyword_seed_available():
     semantic_service.set_client(_client_for(_analysis(category="video")))
     try:

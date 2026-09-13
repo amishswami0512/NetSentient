@@ -17,3 +17,8 @@ pydantic>=2.0,<3.0
 # it -- that one endpoint returns a clear 501 CAPTURE_UNAVAILABLE
 # instead of crashing anything else.
 scapy>=2.5,<3.0
+
+# Production WSGI server (see Dockerfile). Flask's own dev server
+# (`python app.py`) is single-threaded and not meant to be exposed
+# beyond localhost.
+gunicorn>=21.0,<22.0
