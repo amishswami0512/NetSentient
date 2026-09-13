@@ -155,6 +155,7 @@ All responses are JSON. All errors follow this shape:
 | POST | `/api/demo/reset` | Seed the standard demo scenario | — | `{"traffic":[...],"network":{...}}` |
 | POST | `/api/demo/congest` | Enable congestion + run simulation | — | `{"simulation_id":str,"network":{...},"results":[...]}` |
 | POST | `/api/demo/compare` | Baseline vs. semantic routing comparison | — | `{"baseline":[...],"semantic":[...],"improvement":[...]}` |
+| POST | `/api/capture/analyze` | Classify real traffic from a `.pcap` file | `{"pcap_path":"sample.pcap"}` | `{"flows_processed":int,"traffic":[{...,"flow_metadata":{...}}]}` |
 
 Traffic `type` must be one of: `emergency`, `critical_sensor`, `real_time`,
 `video`, `file`, `background`. Any other value returns `400 INVALID_REQUEST`.
@@ -332,7 +333,64 @@ judges. `services/routing_service.py` only ever consumes the final
 `priority` number — it never calls Gemini and doesn't know semantic
 analysis exists.
 
-## 8. Demo Workflow
+## 8. Real Traffic Ingestion (`POST /api/capture/analyze`)
+
+Every other endpoint takes a hand-typed description. This one takes
+**actual network traffic** you captured yourself and runs it through
+the exact same `semantic_service` / `priority_service` pipeline — no
+separate scoring logic, no toy data.
+
+**How to try it with real traffic:**
+
+```bash
+# 1. Capture some real traffic on your own machine (needs sudo):
+sudo tcpdump -i any -w sample.pcap -c 200
+
+# 2. Drop it where the backend is allowed to read from:
+mkdir -p backend/data/captures
+cp sample.pcap backend/data/captures/
+
+# 3. Analyze it:
+curl -X POST http://localhost:5000/api/capture/analyze \
+  -H "Content-Type: application/json" \
+  -d '{"pcap_path": "sample.pcap"}'
+```
+
+What it does, in order (`services/capture_service.py`):
+1. Reads the pcap with `scapy`, groups packets into flows by 5-tuple
+   (both directions of a connection collapse to one flow).
+2. Per flow, extracts what's actually observable: a TLS SNI hostname
+   (parsed directly from the ClientHello's plaintext extension — no
+   decryption involved, that field is never encrypted), a DNS query
+   name, or falls back to protocol/port with a well-known-service
+   name (`443` → "HTTPS/TLS", `53` → "DNS", etc.).
+3. Turns that into a factual description, e.g. `"Encrypted TLS session
+   to 'meet.google.com' on port 443, 340 packets / 210000 bytes over
+   12.4s"` — never a guess at category or importance, just what was
+   observed.
+4. Feeds that description into `semantic_service.analyze()` — the
+   identical function `/api/classify` uses — so real captured traffic
+   is judged by the same Gemini/keyword/fallback rules as typed input.
+5. Adds each flow as a real traffic entry (`state.add_captured_traffic`)
+   so it shows up in `/api/traffic` and the dashboard like anything else.
+
+**Constraints, on purpose:**
+- `pcap_path` is resolved against `Config.CAPTURES_DIR`
+  (`backend/data/captures/` by default) and rejected if it would
+  escape that directory — this endpoint reads a file by client-supplied
+  name, so path traversal is the obvious attack surface and is blocked
+  at the route layer (`routes/capture.py::_resolve_capture_path`).
+- Only the top `CAPTURE_MAX_FLOWS` flows by packet count are processed
+  (default 25) — a huge pcap shouldn't turn one request into thousands
+  of Gemini calls.
+- `scapy` is an optional dependency, same pattern as `google-genai`:
+  not installed → this one endpoint returns `501 CAPTURE_UNAVAILABLE`
+  with a clear message, nothing else in the app is affected.
+- Captured traffic can contain real hostnames/IPs from your own
+  network — `backend/data/` (captures included) is gitignored, never
+  commit a real `.pcap` file.
+
+## 9. Demo Workflow
 
 For a live demo, this sequence tells a complete story:
 
@@ -343,7 +401,7 @@ curl -X POST http://localhost:5000/api/demo/congest    # trigger congestion, sho
 curl -X POST http://localhost:5000/api/simulation/reset  # back to clean state if you want to re-run
 ```
 
-## 9. Testing
+## 10. Testing
 
 ```bash
 cd backend
@@ -355,7 +413,7 @@ All tests use Flask's test client and reset in-memory state before and
 after each test (`tests/conftest.py`), so they don't depend on the
 server being started separately and don't leak state between runs.
 
-## 10. How Teammates Should Integrate
+## 11. How Teammates Should Integrate
 
 **Frontend (dashboard):** point your HTTP client at `http://localhost:5000`,
 allow-list your dev server's origin in `ALLOWED_ORIGINS`, and build
@@ -386,14 +444,19 @@ knowledge that semantic analysis exists. The simulation is intentionally
 deterministic (no `random` calls) so a live demo is reproducible — if
 you extend it, keep it that way.
 
-## 11. Known Limitations
+## 12. Known Limitations
 
-- State is in-memory and per-process: restarting Flask wipes all
-  traffic/congestion/routing state. Use `POST /api/simulation/reset` or
-  `POST /api/demo/reset` instead of restarting when you just need a
-  clean slate.
-- Single-process, no persistence, no auth — by design, for a 36-hour
-  hackathon demo, not production use.
+- State persists to a JSON file (`Config.STATE_FILE_PATH`, default
+  `backend/data/state.json`) so a restart survives — but it's a
+  whole-file overwrite per mutation with no concurrent-write safety,
+  not a real database. Use `POST /api/simulation/reset` or
+  `POST /api/demo/reset` for an explicit clean slate.
+- Single-process, no auth — by design, for a hackathon demo, not
+  production use.
+- `POST /api/capture/analyze` reads real packets but does not enforce
+  anything — no `tc`/`iptables` shaping is wired up, so a captured
+  flow's computed priority does not yet change real bandwidth on the
+  wire. See section 8 for what it does do.
 - The deterministic fallback (used with no `GEMINI_API_KEY`, or when
   Gemini fails) can only estimate *typical* semantic factors for the
   category it detects via keyword matching — it genuinely cannot
