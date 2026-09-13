@@ -32,11 +32,27 @@ def _resolve_hostname(ip: str) -> str:
         socket.setdefaulttimeout(None)
 
 
+def _is_active(connection) -> bool:
+    """TCP connections report a real status (ESTABLISHED when live).
+    UDP is connectionless, so psutil always reports its status as NONE
+    -- there is no "established" for UDP, ever. Without this, every
+    QUIC/HTTP-3 connection (which is UDP-based, and is what modern
+    Chrome negotiates by default with most Google properties,
+    YouTube included) would silently never match anything here,
+    regardless of how real and active it is. Confirmed directly: a
+    live UDP socket reports status "NONE" under psutil, not
+    "ESTABLISHED" -- this isn't a guess.
+    """
+    if connection.status == psutil.CONN_ESTABLISHED:
+        return True
+    return connection.type == socket.SOCK_DGRAM and connection.raddr is not None
+
+
 def scan_active_connections(limit: int = 10) -> list[dict[str, str]]:
     results = []
     seen = set()
     for connection in psutil.net_connections(kind="inet"):
-        if connection.status != psutil.CONN_ESTABLISHED:
+        if not _is_active(connection):
             continue
         if connection.raddr is None:
             continue
@@ -57,6 +73,11 @@ def scan_active_connections(limit: int = 10) -> list[dict[str, str]]:
         # for exactly the sites worth naming correctly (Google-hosted
         # services all resolve to generic "*.1e100.net" infrastructure
         # names, not "youtube.com").
+        # Note: live_sniff_service only extracts SNI from plain TLS-over-
+        # TCP ClientHellos. QUIC (UDP-based HTTP/3) embeds its handshake
+        # differently -- a QUIC connection detected here still falls
+        # through to reverse DNS for its hostname, even with SNI
+        # sniffing enabled, until QUIC's own handshake is parsed too.
         hostname = live_sniff_service.get_sni_for(remote_ip, remote_port) or _resolve_hostname(remote_ip)
         label = f"{process_name} connection to {hostname} on port {remote_port}"
         results.append({"label": label, "hostname": hostname, "port": str(remote_port)})

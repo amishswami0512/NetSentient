@@ -1,3 +1,4 @@
+import socket
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -6,8 +7,8 @@ import psutil
 from services import network_scan_service
 
 
-def _conn(ip, port, status=psutil.CONN_ESTABLISHED, pid=1234):
-    return SimpleNamespace(status=status, raddr=(ip, port), pid=pid)
+def _conn(ip, port, status=psutil.CONN_ESTABLISHED, pid=1234, type=socket.SOCK_STREAM):
+    return SimpleNamespace(status=status, raddr=(ip, port), pid=pid, type=type)
 
 
 def test_scan_active_connections_builds_descriptive_labels():
@@ -57,6 +58,29 @@ def test_scan_active_connections_falls_back_to_ip_when_dns_fails():
         mock_process.return_value.name.return_value = "curl"
         results = network_scan_service.scan_active_connections()
     assert results[0]["hostname"] == "1.2.3.4"
+
+
+def test_scan_active_connections_includes_udp_quic_style_connections():
+    # UDP is connectionless -- psutil always reports its status as
+    # CONN_NONE, never CONN_ESTABLISHED (confirmed directly against a
+    # real UDP socket, not assumed). This is exactly what QUIC/HTTP-3
+    # looks like, which is what modern Chrome negotiates by default
+    # with most Google properties, YouTube included -- without this,
+    # those connections were silently invisible to the scanner.
+    conn = _conn("142.250.1.1", 443, status=psutil.CONN_NONE, type=socket.SOCK_DGRAM)
+    with patch("services.network_scan_service.psutil.net_connections", return_value=[conn]), \
+         patch("services.network_scan_service.psutil.Process") as mock_process, \
+         patch("services.network_scan_service.socket.gethostbyaddr", side_effect=OSError):
+        mock_process.return_value.name.return_value = "chrome"
+        results = network_scan_service.scan_active_connections()
+    assert len(results) == 1
+
+
+def test_scan_active_connections_skips_udp_without_remote_address():
+    conn = _conn("0.0.0.0", 0, status=psutil.CONN_NONE, type=socket.SOCK_DGRAM)
+    conn.raddr = None  # a UDP socket that hasn't connect()ed anywhere yet
+    with patch("services.network_scan_service.psutil.net_connections", return_value=[conn]):
+        assert network_scan_service.scan_active_connections() == []
 
 
 def test_scan_active_connections_respects_limit():
