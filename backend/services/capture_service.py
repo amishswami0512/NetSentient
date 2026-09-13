@@ -41,7 +41,8 @@ class CaptureUnavailable(Exception):
 
 
 def _extract_sni(payload: bytes) -> str | None:
-    """Best-effort manual parse of a TLS ClientHello's SNI extension.
+    """Best-effort manual parse of a TLS-over-TCP record's ClientHello
+    SNI extension (payload includes the 5-byte TLS record header).
 
     Deliberately hand-rolled instead of pulling in scapy's TLS layer
     (which needs the `cryptography` package) or a full TLS library --
@@ -53,7 +54,20 @@ def _extract_sni(payload: bytes) -> str | None:
     try:
         if len(payload) < 5 or payload[0] != 0x16:
             return None
-        handshake = payload[5:]
+        return extract_sni_from_handshake(payload[5:])
+    except (IndexError, ValueError):
+        return None
+
+
+def extract_sni_from_handshake(handshake: bytes) -> str | None:
+    """Same parse as _extract_sni, but starting directly at the TLS
+    Handshake message (type + 3-byte length + body) with no record
+    header in front of it -- this is what QUIC carries in its CRYPTO
+    frames (services/live_sniff_service.py's QUIC path), unlike
+    TLS-over-TCP which wraps it in a record header first. Shared here
+    so both paths parse the ClientHello body identically.
+    """
+    try:
         if len(handshake) < 4 or handshake[0] != 0x01:
             return None
         body = handshake[4:]
