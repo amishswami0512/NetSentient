@@ -33,7 +33,9 @@ _CONGESTION_BANDWIDTH_CAP_MBPS = 2.0
 _TRAFFIC_TYPE_DEMAND_MBPS = {
     "emergency": 0.05,
     "critical_sensor": 0.1,
+    "transactional": 0.05,  # small request/response payloads, like emergency
     "real_time": 0.5,
+    "voice_chat": 0.1,  # voice codecs are far lower-bandwidth than video
     "video": 2.5,
     "file": 4.0,
     "background": 0.5,

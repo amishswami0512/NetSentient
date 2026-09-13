@@ -40,7 +40,7 @@ def scan_traffic():
     created = []
     for connection in connections:
         entry = state.add_traffic(connection["type"], connection["label"])
-        metrics = routing_service.compute_metrics(entry["priority"], congestion, semantic)
+        metrics = routing_service.compute_metrics(entry["priority"], congestion, semantic, entry["type"])
         created.append({**entry, **metrics})
 
     return jsonify({"traffic": created}), 201

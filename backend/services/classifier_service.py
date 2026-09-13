@@ -45,10 +45,18 @@ class RuleBasedClassifier(BaseClassifier):
             "temperature", "pressure", "threshold", "overheating",
             "machine failure", "collision", "autonomous vehicle",
         ],
+        "transactional": [
+            "transaction", "stock trade", "trade execution", "payment",
+            "point-of-sale", "point of sale", "credit card", "authorization token",
+            "order execution", "purchase",
+        ],
         "real_time": [
             "real-time", "real time", "live monitoring", "interactive control",
             "control signal", "control loop", "remote control", "live dashboard",
             "telemetry control",
+        ],
+        "voice_chat": [
+            "voip", "sip", "voice call", "voice chat", "phone call", "dispatcher call",
         ],
         "video": [
             "video", "call", "stream", "conference", "zoom", "meeting",

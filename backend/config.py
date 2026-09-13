@@ -21,7 +21,9 @@ VERSION = "1.0.0"
 PRIORITY_MAP = {
     "emergency": 10,
     "critical_sensor": 9,
+    "transactional": 8,
     "real_time": 7,
+    "voice_chat": 5,
     "video": 5,
     "file": 2,
     "background": 1,
@@ -31,7 +33,9 @@ PRIORITY_MAP = {
 DEFAULT_LABELS = {
     "emergency": "Emergency Alert",
     "critical_sensor": "Critical Sensor",
+    "transactional": "Financial Transaction",
     "real_time": "Live Monitoring Feed",
+    "voice_chat": "Voice Call",
     "video": "Video Call",
     "file": "File Transfer",
     "background": "Background Update",
@@ -89,7 +93,18 @@ PRIORITY_WEIGHTS = {
 CATEGORY_PRIORITY_BOUNDS = {
     "emergency": (7.5, 10.0),
     "critical_sensor": (1.0, 10.0),
+    # Financial operations (stock trade execution, payment authorization):
+    # high floor because a delayed/dropped transaction has real financial
+    # and legal consequence, but capped below critical_sensor/emergency --
+    # this is about money, not life-safety.
+    "transactional": (5.0, 9.0),
     "real_time": (2.0, 8.5),
+    # Same ceiling as video (real-time-ness alone isn't high-stakes), but
+    # a higher floor: voice degrades noticeably faster than video under
+    # jitter/packet loss, so even a mundane call needs a live delivery
+    # guarantee video doesn't (a video call can drop frames far more
+    # gracefully than a voice call can drop syllables).
+    "voice_chat": (2.0, 7.5),
     "video": (1.0, 7.5),
     "file": (0.3, 6.0),
     "background": (0.0, 3.5),
@@ -111,7 +126,9 @@ LOW_CONFIDENCE_THRESHOLD = 0.55
 FALLBACK_SEMANTIC_FACTORS = {
     "emergency": {"urgency": 0.95, "consequence": 0.95, "latency_sensitivity": 0.85, "reliability_requirement": 0.95},
     "critical_sensor": {"urgency": 0.65, "consequence": 0.70, "latency_sensitivity": 0.55, "reliability_requirement": 0.75},
+    "transactional": {"urgency": 0.75, "consequence": 0.80, "latency_sensitivity": 0.60, "reliability_requirement": 0.85},
     "real_time": {"urgency": 0.55, "consequence": 0.45, "latency_sensitivity": 0.80, "reliability_requirement": 0.55},
+    "voice_chat": {"urgency": 0.40, "consequence": 0.30, "latency_sensitivity": 0.75, "reliability_requirement": 0.45},
     "video": {"urgency": 0.35, "consequence": 0.30, "latency_sensitivity": 0.65, "reliability_requirement": 0.45},
     "file": {"urgency": 0.15, "consequence": 0.15, "latency_sensitivity": 0.10, "reliability_requirement": 0.35},
     "background": {"urgency": 0.05, "consequence": 0.05, "latency_sensitivity": 0.05, "reliability_requirement": 0.20},
