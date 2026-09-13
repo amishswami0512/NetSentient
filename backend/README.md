@@ -156,6 +156,9 @@ All responses are JSON. All errors follow this shape:
 | POST | `/api/demo/congest` | Enable congestion + run simulation | — | `{"simulation_id":str,"network":{...},"results":[...]}` |
 | POST | `/api/demo/compare` | Baseline vs. semantic routing comparison | — | `{"baseline":[...],"semantic":[...],"improvement":[...]}` |
 | POST | `/api/capture/analyze` | Classify real traffic from a `.pcap` file | `{"pcap_path":"sample.pcap"}` | `{"flows_processed":int,"traffic":[{...,"flow_metadata":{...}}]}` |
+| POST | `/api/enforce/apply` | Apply a priority to a real flow pattern via tc/iptables | `{"protocol":"tcp","port":443,"priority":8.7,"dst_cidr":"optional"}` | `{"tier":str,"fwmark":int,"dry_run":bool,"commands":[...],"applied":bool,"errors":[...]}` |
+| GET | `/api/enforce/status` | Current tc/iptables enforcement state | — | `{"enabled":bool,"interface":str,"bandwidth_mbps":float,"tiers":[...],"qdisc":str\|null,"classes":str\|null,"mangle_rules":str\|null}` |
+| POST | `/api/enforce/reset` | Tear down all enforcement rules | — | `{"interface":str,"dry_run":bool,"commands":[...],"applied":bool,"errors":[...]}` |
 
 Traffic `type` must be one of: `emergency`, `critical_sensor`, `real_time`,
 `video`, `file`, `background`. Any other value returns `400 INVALID_REQUEST`.
@@ -390,7 +393,80 @@ What it does, in order (`services/capture_service.py`):
   network — `backend/data/` (captures included) is gitignored, never
   commit a real `.pcap` file.
 
-## 9. Demo Workflow
+## 9. Real Enforcement (`POST /api/enforce/apply`)
+
+Section 8 classifies real traffic. This is the other half: actually
+shaping real bandwidth by priority, via `tc` (HTB queueing) and
+`iptables` (fwmark packet marking) -- `services/enforcement_service.py`.
+
+**Safe by default.** `Config.ENFORCEMENT_ENABLED` is `false` unless you
+explicitly set it, and `Config.ENFORCEMENT_INTERFACE` defaults to `lo`
+(loopback, never carries real traffic). Out of the box, every call
+here is a **dry run**: it returns the exact `tc`/`iptables` commands it
+would run without executing anything. This isn't a demo simplification
+-- it's a real safety default, because enabling this reconfigures an
+actual network interface, and that should never happen just because a
+repo was cloned and `.env` copied without reading it.
+
+```bash
+curl -X POST http://localhost:5000/api/enforce/apply \
+  -H "Content-Type: application/json" \
+  -d '{"protocol": "tcp", "port": 443, "priority": 8.7}'
+# -> {"tier":"critical","fwmark":10,"dry_run":true,"commands":[...],"applied":false,"errors":[]}
+```
+
+**How priority maps to bandwidth**, 4 fixed tiers off one bandwidth
+budget (`ENFORCEMENT_BANDWIDTH_MBPS`), each with a guaranteed floor
+(`rate`) and a max it may borrow when others are idle (`ceil`, HTB's
+standard model):
+
+| Priority | Tier | fwmark | Guaranteed | Max (borrowed) |
+|---|---|---|---|---|
+| ≥ 7.5 | critical | 10 | 50% | 90% |
+| ≥ 5.0 | high | 20 | 25% | 60% |
+| ≥ 2.0 | normal | 30 | 15% | 40% |
+| < 2.0 | low | 40 | 5% | 15% |
+
+**To actually shape real traffic** (verified working on a live
+interface during development -- root + `NET_ADMIN` required):
+
+```bash
+export ENFORCEMENT_ENABLED=true
+export ENFORCEMENT_INTERFACE=eth0   # your real interface -- NOT lo
+python app.py
+```
+
+What happens on the first real `apply` call, in order:
+1. **Base topology, once per process** (`tc qdisc replace ... htb` +
+   one `tc class` per tier + one `tc filter` per tier). Uses the `u32`
+   classifier matching on fwmark, not the more commonly-documented
+   `fw` classifier -- `cls_fw` needs a kernel module that isn't present
+   on every kernel (confirmed missing on at least one real deployment
+   target), while `u32` is effectively universal on Linux.
+2. **Per-flow mark rule** (`iptables -t mangle`, in a dedicated
+   `NETSENTIENT_MARK` chain jumped to from `OUTPUT` -- never rules
+   inserted directly into `OUTPUT`, so this never disturbs any
+   pre-existing rules on a real box). Idempotent via an `iptables -C`
+   check before every `-A`, so repeated calls (or a process restart)
+   never pile up duplicate rules.
+
+Subsequent calls only add their own mark rule -- the base topology is
+skipped once already applied (`tc qdisc replace` on the root qdisc
+would otherwise destroy and recreate the whole tree, including every
+other tier's filter, on every single call).
+
+`GET /api/enforce/status` shows the live `tc`/`iptables` state
+(`tc -s qdisc/class show`, `iptables -t mangle -L`) for a demo.
+`POST /api/enforce/reset` deletes the qdisc and flushes the mark chain
+-- also a dry run unless `ENFORCEMENT_ENABLED=true`.
+
+**Not yet wired up:** nothing currently calls `/api/enforce/apply`
+automatically when `/api/capture/analyze` classifies a flow -- they're
+separate endpoints today. Chaining them (auto-enforce every captured
+flow's computed priority) is the natural next step once you're ready
+to point this at a real interface.
+
+## 10. Demo Workflow
 
 For a live demo, this sequence tells a complete story:
 
@@ -401,7 +477,7 @@ curl -X POST http://localhost:5000/api/demo/congest    # trigger congestion, sho
 curl -X POST http://localhost:5000/api/simulation/reset  # back to clean state if you want to re-run
 ```
 
-## 10. Testing
+## 11. Testing
 
 ```bash
 cd backend
@@ -413,7 +489,7 @@ All tests use Flask's test client and reset in-memory state before and
 after each test (`tests/conftest.py`), so they don't depend on the
 server being started separately and don't leak state between runs.
 
-## 11. How Teammates Should Integrate
+## 12. How Teammates Should Integrate
 
 **Frontend (dashboard):** point your HTTP client at `http://localhost:5000`,
 allow-list your dev server's origin in `ALLOWED_ORIGINS`, and build
@@ -444,7 +520,7 @@ knowledge that semantic analysis exists. The simulation is intentionally
 deterministic (no `random` calls) so a live demo is reproducible — if
 you extend it, keep it that way.
 
-## 12. Known Limitations
+## 13. Known Limitations
 
 - State persists to a JSON file (`Config.STATE_FILE_PATH`, default
   `backend/data/state.json`) so a restart survives — but it's a
@@ -453,10 +529,13 @@ you extend it, keep it that way.
   `POST /api/demo/reset` for an explicit clean slate.
 - Single-process, no auth — by design, for a hackathon demo, not
   production use.
-- `POST /api/capture/analyze` reads real packets but does not enforce
-  anything — no `tc`/`iptables` shaping is wired up, so a captured
-  flow's computed priority does not yet change real bandwidth on the
-  wire. See section 8 for what it does do.
+- `POST /api/capture/analyze` and `POST /api/enforce/apply` exist
+  side by side but aren't chained — classifying a captured flow
+  doesn't automatically enforce it. See sections 8 and 9.
+- Enforcement (`services/enforcement_service.py`) uses 4 fixed
+  bandwidth tiers keyed off fwmark, not per-flow fairness within a
+  tier — two `critical` flows share that tier's guaranteed rate rather
+  than each getting their own guarantee.
 - The deterministic fallback (used with no `GEMINI_API_KEY`, or when
   Gemini fails) can only estimate *typical* semantic factors for the
   category it detects via keyword matching — it genuinely cannot
