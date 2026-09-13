@@ -53,6 +53,10 @@ def test_extract_flows_from_synthetic_pcap(tmp_path):
     assert http_flow["protocol"] == "tcp"
     assert http_flow["sni"] is None
     assert http_flow["dns_name"] is None
+    assert http_flow["signature"] == "tcp:80"
+
+    dns_flow = next(f for f in flows if f["dns_name"] == "example.org")
+    assert dns_flow["signature"] == "dns:example.org"
 
 
 def test_extract_flows_caps_at_max_flows(tmp_path):

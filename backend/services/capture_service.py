@@ -8,6 +8,14 @@ semantic_service.analyze() / priority_service.score() pipeline that
 POST /api/classify already uses, so real captured traffic is judged by
 the same rules as a hand-typed description.
 
+Each flow also gets a `signature` -- a stable identity for the flow
+*pattern* (e.g. "tls:zoom.us:443"), separate from its `description`
+(which bakes in this observation's packet/byte counts and so is
+different every time, even for the same underlying pattern). Callers
+should pass `signature` as semantic_service.analyze()'s `cache_key` so
+repeat traffic to the same host is classified by Gemini once, not once
+per capture.
+
 scapy is an optional dependency (like google-genai): importing it
 happens lazily, inside extract_flows(), so the rest of the app runs
 fine without it installed -- only POST /api/capture/analyze needs it.
@@ -99,6 +107,21 @@ def _describe_flow(
     )
 
 
+def _flow_signature(proto: str, dport: int, sni: str | None, dns_name: str | None) -> str:
+    """A stable identity for a flow *pattern*, deliberately excluding
+    volatile per-observation stats (packet/byte counts, duration) that
+    make _describe_flow()'s text unique on every single capture. Used
+    as semantic_service.analyze()'s cache key so repeat traffic to the
+    same host/service is classified by Gemini once, not once per
+    capture run.
+    """
+    if sni:
+        return f"tls:{sni}:{dport}"
+    if dns_name:
+        return f"dns:{dns_name}"
+    return f"{proto}:{dport}"
+
+
 def _flow_key(proto: str, src_ip: str, sport: int, dst_ip: str, dport: int) -> tuple:
     """Both directions of the same connection collapse to one key,
     regardless of which side is the source in a given packet.
@@ -167,6 +190,7 @@ def extract_flows(pcap_path: str, max_flows: int = 25) -> list[dict[str, Any]]:
                 f["proto"], f["dport"], f["sni"], f["dns_name"],
                 f["packet_count"], f["total_bytes"], duration,
             ),
+            "signature": _flow_signature(f["proto"], f["dport"], f["sni"], f["dns_name"]),
             "protocol": f["proto"],
             "port": f["dport"],
             "packet_count": f["packet_count"],

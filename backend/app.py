@@ -5,7 +5,7 @@ Run locally with: python app.py
 import logging
 from pathlib import Path
 
-from flask import Flask, jsonify, send_from_directory
+from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 
 from config import Config
@@ -39,6 +39,26 @@ def create_app() -> Flask:
     @app.get("/")
     def get_api_info():
         return send_from_directory(app.static_folder, "index.html")
+
+    @app.before_request
+    def _require_api_key():
+        # No keys configured -- auth is off, same behavior as every
+        # earlier version of this app. /api/health stays open even
+        # with auth on, since it's the liveness probe a load balancer
+        # or orchestrator hits before anything else is ready to
+        # authenticate. Anything outside /api/ (the served frontend,
+        # including "/") is never gated by an API key meant for the
+        # backend API.
+        if not Config.API_KEYS or request.path == "/api/health":
+            return None
+        if not request.path.startswith("/api/"):
+            return None
+
+        auth_header = request.headers.get("Authorization", "")
+        token = auth_header[len("Bearer "):].strip() if auth_header.startswith("Bearer ") else ""
+        if token not in Config.API_KEYS:
+            raise APIError("UNAUTHORIZED", "Missing or invalid API key.", 401)
+        return None
 
     @app.errorhandler(APIError)
     def handle_api_error(err: APIError):

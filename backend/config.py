@@ -180,19 +180,20 @@ class Config:
         os.environ.get("GEMINI_REQUEST_BUDGET_SECONDS", "4.0")
     )
 
-    # Where active traffic / congestion / routing state is persisted to
-    # disk (see services/state_service.py), so restarting Flask no
-    # longer wipes it -- only an explicit reset does. Defaults to a
-    # path next to this file so it resolves correctly regardless of
-    # the process's current working directory.
+    # Where active traffic / congestion / routing state is persisted
+    # (see services/state_service.py) -- a real SQLite database (WAL
+    # mode), not a JSON snapshot, so it's transactional and safe to
+    # share across multiple worker processes (e.g. gunicorn). Defaults
+    # to a path next to this file so it resolves correctly regardless
+    # of the process's current working directory.
     #
     # Uses `or` rather than os.environ.get(key, default): .env.example
     # ships this key present but blank (meaning "use the default"), and
     # os.environ.get's default only kicks in when the key is *absent* --
     # a present-but-empty value would otherwise resolve to "", the same
     # class of bug GEMINI_TIMEOUT_SECONDS hit earlier.
-    STATE_FILE_PATH = os.environ.get("STATE_FILE_PATH") or os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "data", "state.json"
+    STATE_DB_PATH = os.environ.get("STATE_DB_PATH") or os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "data", "state.db"
     )
 
     # Directory POST /api/capture/analyze is allowed to read pcap files
@@ -222,3 +223,12 @@ class Config:
     ENFORCEMENT_INTERFACE = os.environ.get("ENFORCEMENT_INTERFACE") or "lo"
     # Total bandwidth budget (Mbps) the priority tiers divide up.
     ENFORCEMENT_BANDWIDTH_MBPS = float(os.environ.get("ENFORCEMENT_BANDWIDTH_MBPS", "10"))
+
+    # Comma-separated API keys accepted as `Authorization: Bearer <key>`
+    # on every /api/* route except /api/health. Empty (default) means
+    # no auth is required -- backward compatible with every earlier
+    # section of this README, and appropriate for local development.
+    # Set this before exposing the API beyond localhost.
+    API_KEYS = frozenset(
+        key.strip() for key in os.environ.get("API_KEYS", "").split(",") if key.strip()
+    )

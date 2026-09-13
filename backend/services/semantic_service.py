@@ -230,16 +230,33 @@ def analyze_for_category(text: str, category: str) -> dict[str, Any]:
     return result
 
 
-def analyze(text: str) -> dict[str, Any]:
+def analyze(text: str, cache_key: str | None = None) -> dict[str, Any]:
     """Return {category, confidence, factors, reason, source} for `text`.
 
     Always succeeds. `factors` is a dict with keys urgency, consequence,
     latency_sensitivity, reliability_requirement, each 0.0-1.0.
-    `source` is "gemini" or "fallback". Results are cached by normalized
-    text, so repeated identical input is instant and never re-calls
-    Gemini within this process's lifetime.
+    `source` is "gemini", "keyword", or "fallback". Only non-fallback
+    results are cached (by normalized text, or by `cache_key` if given
+    -- see below): caching a fallback answer would mean a transient
+    Gemini failure (a timeout, a network blip) gets stuck showing
+    "fallback" forever for that input, instead of the next call simply
+    retrying Gemini and self-healing once it recovers.
+
+    `cache_key`, when given, is used for the cache lookup/store instead
+    of `text` itself, while `text` is still what actually gets sent to
+    Gemini on a miss. This matters for real captured traffic
+    (services/capture_service.py): the display description bakes in
+    per-observation stats ("340 packets over 12.4s") that make every
+    single flow's literal text unique, so keying the cache on that text
+    would call Gemini fresh for every repeat connection to the same
+    host -- keying on a stable signature instead ("tls:zoom.us:443")
+    means the *first* observation of a pattern gets a real Gemini call
+    with its full descriptive text, and every later occurrence of that
+    same pattern reuses the result instantly, regardless of its own
+    (different) packet/byte counts.
     """
-    cached = _cache.get(text)
+    key = cache_key or text
+    cached = _cache.get(key)
     if cached is not None:
         return cached
 
@@ -257,5 +274,5 @@ def analyze(text: str) -> dict[str, Any]:
         result = _fallback_result(text)
 
     if result["source"] != "fallback":
-        _cache.put(text, result)
+        _cache.put(key, result)
     return result
