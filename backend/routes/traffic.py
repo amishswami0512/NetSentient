@@ -2,7 +2,7 @@ from flask import Blueprint, jsonify, request
 
 from config import DEFAULT_LABELS
 from models.schemas import optional_string_field, parse_json_body, require_traffic_type
-from services import routing_service, simulation_service
+from services import network_scan_service, routing_service, simulation_service
 from services.state_service import state
 
 traffic_bp = Blueprint("traffic", __name__)
@@ -27,6 +27,20 @@ def create_traffic():
     entry = state.add_traffic(traffic_type, label)
     congestion = state.get_congestion()
     semantic = state.get_semantic_routing()
-    metrics = routing_service.compute_metrics(entry["priority"], congestion, semantic)
+    metrics = routing_service.compute_metrics(entry["priority"], congestion, semantic, entry["type"])
 
     return jsonify({**entry, **metrics}), 201
+
+
+@traffic_bp.route("/api/traffic/scan", methods=["POST"])
+def scan_traffic():
+    connections = network_scan_service.scan_active_connections()
+    congestion = state.get_congestion()
+    semantic = state.get_semantic_routing()
+    created = []
+    for connection in connections:
+        entry = state.add_traffic(connection["type"], connection["label"])
+        metrics = routing_service.compute_metrics(entry["priority"], congestion, semantic)
+        created.append({**entry, **metrics})
+
+    return jsonify({"traffic": created}), 201

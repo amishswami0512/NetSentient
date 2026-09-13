@@ -7,6 +7,8 @@ let semantic = true;
 let events = [];
 let trafficChart;
 let criticalityChart;
+let initialDemoPending = true;
+let initialDemoLoading = false;
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[char]));
@@ -33,6 +35,12 @@ const TYPE_CLASSES = {
   file: 'file',
   background: 'file',
 };
+const FLOW_TIERS = [
+  { key: 'emergency', label: 'Emergency', className: 'emergency', types: ['emergency'] },
+  { key: 'sensor', label: 'Sensor', className: 'sensor', types: ['critical_sensor'] },
+  { key: 'video', label: 'Video', className: 'video', types: ['real_time', 'video'] },
+  { key: 'bulk', label: 'Bulk', className: 'file', types: ['file', 'background'] },
+];
 const SOURCE_LABELS = {
   gemini: 'GEMINI ANALYSIS',
   keyword: 'KEYWORD FAST PATH',
@@ -70,12 +78,22 @@ function updateNetwork(status) {
   $('flowsValue').textContent = number(status.active_connections);
 }
 
+function average(items, field) {
+  return items.length ? items.reduce((sum, item) => sum + number(item[field]), 0) / items.length : 0;
+}
+
+function renderFlowRow(flow) {
+  return `<div class="flow-row"><div class="flow-row-main"><span class="flow-row-name" title="${escapeHtml(flow.label)}">${escapeHtml(flow.label)}</span><span class="priority">P${number(flow.priority).toFixed(1)}</span></div><div class="flow-row-metrics"><span>${number(flow.delivery_percent).toFixed(1)}% delivery</span><span>${number(flow.latency_ms).toFixed(0)} ms</span><span>${number(flow.packet_loss_percent).toFixed(1)}% loss</span><span class="status ${escapeHtml(flow.status || 'fair')}">${escapeHtml(flow.status || 'fair')}</span></div></div>`;
+}
+
 function renderTraffic(items) {
-  if (!items.length) {
-    $('trafficGrid').innerHTML = '<div class="traffic-card" style="grid-column:1/-1"><div class="traffic-meta">No active flows. Load demo traffic or analyze a payload to populate the network.</div></div>';
-    return;
-  }
-  $('trafficGrid').innerHTML = items.map((flow) => `<article class="traffic-card ${typeClass(flow.type)}"><div class="traffic-top"><span class="traffic-name" title="${escapeHtml(flow.label)}">${escapeHtml(flow.label)}</span><span class="priority">P${number(flow.priority).toFixed(1)}</span></div><div class="traffic-value">${number(flow.delivery_percent).toFixed(1)}<span style="font-size:11px;color:#647980">%</span></div><div class="traffic-meta">delivery · ${number(flow.latency_ms).toFixed(0)} ms latency · ${number(flow.packet_loss_percent).toFixed(1)}% loss</div><span class="status ${escapeHtml(flow.status || 'fair')}">${escapeHtml(flow.status || 'fair')}</span></article>`).join('');
+  $('trafficGrid').innerHTML = FLOW_TIERS.map((tier) => {
+    const tierFlows = items.filter((flow) => tier.types.includes(flow.type));
+    const summary = tierFlows.length
+      ? `<div class="tier-summary"><div><span>AVG PRIORITY</span><strong>P${average(tierFlows, 'priority').toFixed(1)}</strong></div><div><span>DELIVERY</span><strong>${average(tierFlows, 'delivery_percent').toFixed(1)}%</strong></div><div><span>LATENCY</span><strong>${average(tierFlows, 'latency_ms').toFixed(0)} ms</strong></div><div><span>LOSS</span><strong>${average(tierFlows, 'packet_loss_percent').toFixed(1)}%</strong></div></div>`
+      : '<div class="tier-empty">No active flows in this tier.</div>';
+    return `<article class="tier-card ${tier.className}"><div class="tier-heading"><div><span class="eyebrow">TRAFFIC TIER</span><h3>${tier.label}</h3></div><b>${tierFlows.length} ${tierFlows.length === 1 ? 'flow' : 'flows'}</b></div>${summary}<div class="flow-list">${tierFlows.map(renderFlowRow).join('')}</div></article>`;
+  }).join('');
 }
 
 function initCharts() {
@@ -135,6 +153,19 @@ async function refresh() {
     $('healthDot').classList.add('ok'); $('healthText').textContent = 'API online'; $('apiVersion').textContent = health.version || 'ready';
     congestion = Boolean(status.congestion); semantic = Boolean(status.semantic_routing_enabled); updateToggles(); updateNetwork(status);
     const flows = trafficData.traffic || []; renderTraffic(flows); updateCharts(flows);
+    if (initialDemoPending && !flows.length && !initialDemoLoading) {
+      initialDemoLoading = true;
+      try {
+        const demo = await request('/demo/reset', { method: 'POST' });
+        initialDemoPending = false;
+        logEvent(`Loaded ${demo.traffic.length} demo flows`, 'demo');
+        await refresh();
+      } catch (error) {
+        logEvent(`Demo loading will retry: ${error.message}`, 'error');
+      } finally {
+        initialDemoLoading = false;
+      }
+    }
   } catch (error) {
     $('healthDot').classList.remove('ok'); $('healthText').textContent = 'API offline'; $('apiVersion').textContent = '—';
   }

@@ -77,7 +77,6 @@ _COMMON_KEYWORD_SEED: dict[str, str] = {
     "cloud sync": "background",
 }
 
-
 def _seed_common_keywords() -> None:
     for phrase, category in _COMMON_KEYWORD_SEED.items():
         _cache.put(
@@ -226,7 +225,8 @@ def analyze_for_category(text: str, category: str) -> dict[str, Any]:
             "source": "fallback",
         }
 
-    _cache.put(cache_key, result)
+    if result["source"] != "fallback":
+        _cache.put(cache_key, result)
     return result
 
 
@@ -256,5 +256,6 @@ def analyze(text: str) -> dict[str, Any]:
     if result is None:
         result = _fallback_result(text)
 
-    _cache.put(text, result)
+    if result["source"] != "fallback":
+        _cache.put(text, result)
     return result

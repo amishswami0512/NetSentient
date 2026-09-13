@@ -103,6 +103,23 @@ def test_analyze_result_is_cached_and_gemini_is_called_once():
         _restore()
 
 
+def test_fallback_result_is_not_cached_before_gemini_recovers():
+    failing_client = _client_for(None, exception=RuntimeError("temporary failure"))
+    semantic_service.set_client(failing_client)
+    text = "A nuanced operational description"
+    try:
+        first = semantic_service.analyze(text)
+        assert first["source"] == "fallback"
+
+        recovered_client = _client_for(_analysis(category="video"))
+        semantic_service.set_client(recovered_client)
+        second = semantic_service.analyze(text)
+        assert second["source"] == "gemini"
+        assert second["category"] == "video"
+    finally:
+        _restore()
+
+
 def test_switching_client_invalidates_cache():
     semantic_service.set_client(_client_for(_analysis(category="critical_sensor")))
     text = "some traffic description"

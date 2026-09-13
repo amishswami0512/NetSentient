@@ -14,11 +14,26 @@ from services.state_service import state
 # exercises context-aware semantic analysis instead of just re-deriving
 # a flat per-type default.
 DEMO_SCENARIOS: list[tuple[str, str]] = [
-    ("emergency", "Ambulance emergency alert requiring immediate response"),
-    ("critical_sensor", "Factory temperature exceeded fire safety threshold"),
-    ("real_time", "Autonomous vehicle collision warning"),
-    ("video", "Normal live video conference"),
-    ("file", "Large operating system update download"),
+    ("emergency", "Active active-shooter alert triggered on campus building B"),
+    ("emergency", "SOS heartbeat packet from offshore oil rig crew capsule"),
+    ("emergency", "Airbag deployment confirmation and GPS coordinates from vehicle"),
+    ("emergency", "Residential smart alarm reporting active carbon monoxide leak"),
+    ("critical_sensor", "Main grid transformer oil temperature at 140C - melt risk"),
+    ("critical_sensor", "Gas pipeline telemetry showing pressure drop in Sector 4"),
+    ("critical_sensor", "Hydroelectric dam water level sensor exceeding spillway limit"),
+    ("critical_sensor", "Server room rack B4 humidity alert - condensation danger"),
+    ("real_time", "Drone telemetry stream requesting immediate landing vector"),
+    ("real_time", "Lidar obstacle distance stream for warehouse forklift automation"),
+    ("transactional", "API request: High-frequency stock trade execution order"),
+    ("transactional", "Point-of-Sale credit card authorization token exchange"),
+    ("video", "Remote surgical robot camera stream payload chunk 402"),
+    ("video", "Corporate board meeting 4K video conference chunk"),
+    ("voice_chat", "VoIP packet SIP signal for emergency dispatcher call"),
+    ("voice_chat", "Customer support live chat websocket message text payload"),
+    ("file", "Nightly database replication sync chunk for backup servers"),
+    ("file", "Windows 11 monthly security patch update archive split_05"),
+    ("file", "Text message saying: Emergency! I forgot to download the movie file"),
+    ("critical_sensor", "Weather station report: Temperature is a beautiful 22 degrees")
 ]
 
 
@@ -28,7 +43,7 @@ def traffic_with_metrics() -> list[dict[str, Any]]:
     semantic = state.get_semantic_routing()
     items = []
     for t in state.get_traffic_list():
-        metrics = routing_service.compute_metrics(t["priority"], congestion, semantic)
+        metrics = routing_service.compute_metrics(t["priority"], congestion, semantic, t["type"])
         items.append({**t, **metrics})
     return items
 
@@ -41,7 +56,7 @@ def run_simulation() -> dict[str, Any]:
     results = []
     for t in state.get_traffic_list():
         metrics = routing_service.compute_metrics(
-            t["priority"], network["congestion"], network["semantic_routing_enabled"]
+            t["priority"], network["congestion"], network["semantic_routing_enabled"], t["type"]
         )
         results.append(
             {
@@ -79,8 +94,8 @@ def compare_routing_modes() -> dict[str, Any]:
     semantic = []
     improvement = []
     for t in traffic:
-        baseline_metrics = routing_service.compute_metrics(t["priority"], True, False)
-        semantic_metrics = routing_service.compute_metrics(t["priority"], True, True)
+        baseline_metrics = routing_service.compute_metrics(t["priority"], True, False, t["type"])
+        semantic_metrics = routing_service.compute_metrics(t["priority"], True, True, t["type"])
 
         baseline.append({"traffic_id": t["id"], "type": t["type"], "priority": t["priority"], **baseline_metrics})
         semantic.append({"traffic_id": t["id"], "type": t["type"], "priority": t["priority"], **semantic_metrics})

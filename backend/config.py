@@ -157,6 +157,11 @@ class Config:
     # lower default here would make every real Gemini call fail
     # outright, regardless of how valid the API key is.
     GEMINI_TIMEOUT_SECONDS = float(os.environ.get("GEMINI_TIMEOUT_SECONDS", "12.0"))
+    # Keep the HTTP request responsive even if Gemini is slow. The SDK keeps
+    # its API-compatible timeout above, while the service falls back sooner.
+    GEMINI_REQUEST_BUDGET_SECONDS = float(
+        os.environ.get("GEMINI_REQUEST_BUDGET_SECONDS", "4.0")
+    )
 
     # Where active traffic / congestion / routing state is persisted to
     # disk (see services/state_service.py), so restarting Flask no
