@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from flask import Blueprint, jsonify, request
 
 from config import DEFAULT_LABELS
@@ -47,4 +49,8 @@ def scan_traffic():
         metrics = routing_service.compute_metrics(entry["priority"], congestion, semantic, entry["type"])
         created.append({**entry, **metrics})
 
-    return jsonify({"traffic": created}), 201
+    return jsonify({
+        "traffic": created,
+        "count": len(created),
+        "scanned_at": datetime.now(timezone.utc).isoformat(),
+    }), 201

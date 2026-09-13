@@ -4,6 +4,9 @@ def test_enable_congestion(client):
     data = resp.get_json()
     assert data["congestion"] is True
     assert data["bandwidth_mbps"] < 10
+    assert "latency_ms" in data
+    assert data["measurement_source"] in ("measured", "fallback")
+    assert data["measurement_ok"] == (data["measurement_source"] == "measured")
 
 
 def test_disable_congestion(client):

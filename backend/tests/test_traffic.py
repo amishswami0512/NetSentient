@@ -11,11 +11,15 @@ def test_network_status_shape(client):
         "congestion",
         "load_percent",
         "bandwidth_mbps",
+        "latency_ms",
+        "measurement_ok",
+        "measurement_source",
         "semantic_routing_enabled",
         "active_connections",
         "timestamp",
     ):
         assert field in data
+    assert data["measurement_source"] in ("measured", "fallback")
 
 
 def test_get_traffic_empty_initially(client):
@@ -116,6 +120,8 @@ def test_scan_traffic_classifies_via_real_pipeline_not_port_guess(client):
 
     assert resp.status_code == 201
     data = resp.get_json()
+    assert data["count"] == 1
+    assert "scanned_at" in data
     assert len(data["traffic"]) == 1
     entry = data["traffic"][0]
     assert entry["type"] == "video"
@@ -127,4 +133,7 @@ def test_scan_traffic_with_no_connections_returns_empty_list(client):
     with patch("services.network_scan_service.scan_active_connections", return_value=[]):
         resp = client.post("/api/traffic/scan")
     assert resp.status_code == 201
-    assert resp.get_json() == {"traffic": []}
+    data = resp.get_json()
+    assert data["traffic"] == []
+    assert data["count"] == 0
+    assert "scanned_at" in data

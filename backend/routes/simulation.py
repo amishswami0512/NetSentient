@@ -18,6 +18,9 @@ def set_congestion():
             "congestion": status["congestion"],
             "load_percent": status["load_percent"],
             "bandwidth_mbps": status["bandwidth_mbps"],
+            "latency_ms": status["latency_ms"],
+            "measurement_ok": status["measurement_ok"],
+            "measurement_source": status["measurement_source"],
         }
     ), 200
 

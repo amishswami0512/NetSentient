@@ -106,7 +106,7 @@ def compute_metrics(
 
 def get_network_status() -> dict[str, Any]:
     congestion = state.get_congestion()
-    bandwidth_mbps, _ = network_probe.get_measured_bandwidth()
+    bandwidth_mbps, latency_ms, measurement_ok = network_probe.get_measured_bandwidth()
     if congestion:
         bandwidth_mbps = round(
             min(bandwidth_mbps * _CONGESTION_BANDWIDTH_FRACTION, _CONGESTION_BANDWIDTH_CAP_MBPS), 2
@@ -123,6 +123,9 @@ def get_network_status() -> dict[str, Any]:
         "congestion": congestion,
         "load_percent": load_percent,
         "bandwidth_mbps": bandwidth_mbps,
+        "latency_ms": latency_ms,
+        "measurement_ok": measurement_ok,
+        "measurement_source": "measured" if measurement_ok else "fallback",
         "semantic_routing_enabled": state.get_semantic_routing(),
         "active_connections": len(state.get_traffic_list()),
         "timestamp": datetime.now(timezone.utc).isoformat(),
