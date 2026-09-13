@@ -163,7 +163,25 @@ class Config:
     # longer wipes it -- only an explicit reset does. Defaults to a
     # path next to this file so it resolves correctly regardless of
     # the process's current working directory.
-    STATE_FILE_PATH = os.environ.get(
-        "STATE_FILE_PATH",
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "state.json"),
+    #
+    # Uses `or` rather than os.environ.get(key, default): .env.example
+    # ships this key present but blank (meaning "use the default"), and
+    # os.environ.get's default only kicks in when the key is *absent* --
+    # a present-but-empty value would otherwise resolve to "", the same
+    # class of bug GEMINI_TIMEOUT_SECONDS hit earlier.
+    STATE_FILE_PATH = os.environ.get("STATE_FILE_PATH") or os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "data", "state.json"
     )
+
+    # Directory POST /api/capture/analyze is allowed to read pcap files
+    # from (services/capture_service.py). Requests may only reference
+    # files inside this directory -- see routes/capture.py's path
+    # resolution -- so a client can never read arbitrary files off disk
+    # via a crafted pcap_path.
+    CAPTURES_DIR = os.environ.get("CAPTURES_DIR") or os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "data", "captures"
+    )
+    # Cap on how many distinct flows a single capture analysis returns
+    # (ranked by packet count) -- keeps a huge pcap from turning one
+    # request into thousands of Gemini calls / traffic entries.
+    CAPTURE_MAX_FLOWS = int(os.environ.get("CAPTURE_MAX_FLOWS", "25"))

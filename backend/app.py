@@ -9,6 +9,7 @@ from flask_cors import CORS
 
 from config import Config
 from models.schemas import APIError
+from routes.capture import capture_bp
 from routes.classify import classify_bp
 from routes.demo import demo_bp
 from routes.health import health_bp
@@ -29,6 +30,7 @@ def create_app() -> Flask:
     app.register_blueprint(classify_bp)
     app.register_blueprint(simulation_bp)
     app.register_blueprint(demo_bp)
+    app.register_blueprint(capture_bp)
 
     @app.errorhandler(APIError)
     def handle_api_error(err: APIError):

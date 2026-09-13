@@ -107,6 +107,32 @@ class StateService:
         self._save()
         return entry
 
+    def add_captured_traffic(self, label: str) -> dict[str, Any]:
+        """Like add_traffic(), but for real captured traffic (see
+        services/capture_service.py) where the category isn't known in
+        advance. Uses semantic_service.analyze() -- Gemini's own
+        category guess is trusted here, unlike add_traffic() where a
+        client-declared type takes precedence.
+        """
+        self._traffic_seq += 1
+        traffic_id = f"traffic-{self._traffic_seq:03d}"
+
+        analysis = semantic_service.analyze(label)
+        scored = priority_service.score(analysis["category"], analysis["confidence"], analysis["factors"])
+
+        entry = {
+            "id": traffic_id,
+            "type": analysis["category"],
+            "label": label,
+            "priority": scored["priority"],
+            "priority_factors": analysis["factors"],
+            "low_confidence": scored["low_confidence"],
+            "source": analysis["source"],
+        }
+        self._traffic[traffic_id] = entry
+        self._save()
+        return entry
+
     def get_traffic_list(self) -> list[dict[str, Any]]:
         return list(self._traffic.values())
 
