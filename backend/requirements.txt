@@ -20,6 +20,17 @@ pydantic>=2.0,<3.0
 # instead of crashing anything else.
 scapy>=2.5,<3.0
 
+# Optional: only needed for live QUIC/HTTP-3 SNI sniffing
+# (services/live_sniff_service.py's QUIC path). Used only for its
+# well-tested, RFC 9001-compliant Initial-packet key derivation and
+# AEAD decryption -- QUIC's Initial keys are derived from public
+# values (not a secret), so this reads the same plaintext ClientHello
+# hostname a browser sends, never anything encrypted with real
+# session keys. Without it, QUIC connections still get detected, just
+# labeled via reverse DNS instead of their real hostname (same as
+# before this existed).
+aioquic>=1.0,<2.0
+
 # Production WSGI server (see Dockerfile). Flask's own dev server
 # (`python app.py`) is single-threaded and not meant to be exposed
 # beyond localhost.

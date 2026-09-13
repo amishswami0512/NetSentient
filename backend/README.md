@@ -524,12 +524,19 @@ you extend it, keep it that way.
 
 ## 13. Known Limitations
 
-- Live SNI sniffing only sees a hostname for connections whose TLS
-  handshake happens *after* sniffing starts — a connection already
-  established before the server started still falls back to reverse
-  DNS until it reconnects. It also only ever helps with HTTPS (port
-  443); plain HTTP and other protocols were never affected by the
-  reverse-DNS problem it fixes.
+- Live SNI sniffing only sees a hostname for connections whose
+  TLS/QUIC handshake happens *after* sniffing starts — a connection
+  already established before the server started still falls back to
+  reverse DNS until it reconnects. It also only ever helps with HTTPS
+  (port 443); plain HTTP and other protocols were never affected by
+  the reverse-DNS problem it fixes.
+- QUIC decryption only supports version 1 (RFC 9001) and only Initial
+  packets — a QUIC version negotiation, a non-v1 draft version, or any
+  packet past the handshake is deliberately skipped, not a bug. A
+  fragmented ClientHello only reassembles from fragments that arrive
+  contiguously starting at offset 0; badly out-of-order fragments
+  (rare in practice) fall back to reverse DNS instead of waiting
+  indefinitely.
 - State persists to a real SQLite database (`Config.STATE_DB_PATH`,
   WAL mode), safe across process restarts and multiple worker
   processes sharing the file. It's still a single-file database, not a
@@ -664,6 +671,42 @@ Without it, or if it's enabled but scapy isn't installed, or the
 process isn't running with the needed privileges: everything still
 works exactly as before this existed, just back to reverse-DNS
 hostnames. Nothing crashes either way.
+
+**QUIC (HTTP/3) is also handled, not just plain TLS.** Modern Chrome
+negotiates QUIC — HTTP/3 over UDP — by default with most Google
+properties, YouTube included. Two things had to be fixed for that:
+
+1. `network_scan_service.py`'s connection scan only matched
+   `psutil.CONN_ESTABLISHED`, which UDP sockets never report — confirmed
+   directly against a real UDP socket (`psutil` always reports UDP
+   status as `CONN_NONE`, since UDP is connectionless), not assumed.
+   Every QUIC connection was invisible to the scanner regardless of how
+   active it was. Fixed: a UDP socket with a real remote address now
+   counts too.
+2. QUIC's Initial packets — the only ones carrying the ClientHello —
+   are encrypted, but with keys derived entirely from public values (a
+   fixed salt plus the packet's own visible connection ID, RFC 9001
+   section 5.2), not a real secret. `live_sniff_service.py` decrypts
+   them using `aioquic`, a well-tested, RFC 9001-compliant
+   implementation, rather than hand-rolled crypto — **validated
+   directly against the RFC's own official Appendix A.2 test vector
+   before trusting it on live traffic** (bit-exact match, confirmed via
+   a reference implementation's own test suite since the RFC mirrors
+   this environment could reach were blocked by network policy). A
+   fragmented ClientHello spanning multiple Initial packets (common for
+   a real browser's full extension set) is reassembled from its CRYPTO
+   frames before extraction.
+
+Verified with genuine live packet capture, not just direct function
+calls: a real UDP datagram carrying the RFC's own encrypted test
+packet was sent on the wire, captured live by `scapy.sniff()`,
+decrypted, and correctly yielded `"example.com"` — the same hostname
+the RFC vector's ClientHello actually specifies.
+
+QUIC decryption only covers Initial packets, which is inherent, not a
+gap to fix — every later packet in a QUIC connection uses real
+negotiated session keys this process has no way to obtain, by design
+(that's the whole point of a handshake).
 
 Both background threads guard against Flask's debug-mode reloader
 running application setup twice (`WERKZEUG_RUN_MAIN` check in
