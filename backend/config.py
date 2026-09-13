@@ -232,3 +232,25 @@ class Config:
     API_KEYS = frozenset(
         key.strip() for key in os.environ.get("API_KEYS", "").split(",") if key.strip()
     )
+
+    # Background live-connection scanning (services/scan_poller.py):
+    # periodically re-runs network_scan_service.scan_active_connections()
+    # so a newly opened site/app shows up as traffic automatically,
+    # without anyone calling POST /api/traffic/scan by hand. On by
+    # default -- unlike ENFORCEMENT_ENABLED, this only reads local
+    # connection info and classifies it, it never touches the network
+    # itself, so there's no safety reason to default it off.
+    SCAN_POLL_ENABLED = os.environ.get("SCAN_POLL_ENABLED", "true").lower() == "true"
+    SCAN_POLL_INTERVAL_SECONDS = float(os.environ.get("SCAN_POLL_INTERVAL_SECONDS", "5"))
+
+    # Live TLS SNI sniffing (services/live_sniff_service.py): reads the
+    # real hostname straight out of outbound HTTPS handshakes instead
+    # of relying on reverse DNS, which is unreliable for exactly the
+    # sites worth naming correctly (see that module's docstring). Off
+    # by default -- unlike scan polling, this needs raw packet access
+    # (root/administrator, same requirement as tcpdump), so it must be
+    # deliberately opted into, not assumed safe for every environment.
+    SNI_SNIFF_ENABLED = os.environ.get("SNI_SNIFF_ENABLED", "false").lower() == "true"
+    # Interface to sniff on. Unset (default) auto-detects via scapy's
+    # own default-route interface detection.
+    SNI_SNIFF_INTERFACE = os.environ.get("SNI_SNIFF_INTERFACE") or None

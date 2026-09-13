@@ -60,9 +60,15 @@ class RuleBasedClassifier(BaseClassifier):
         ],
         "video": [
             "video", "call", "stream", "conference", "zoom", "meeting",
+            # Well-known video/streaming hostnames -- so a scanned
+            # connection's label ("chrome connection to youtube.com on
+            # port 443") still gets a sensible category in fallback
+            # mode, not just whatever port 443 happens to map to.
+            "youtube", "netflix", "twitch", "hulu", "disneyplus", "primevideo",
         ],
         "file": [
             "file", "upload", "download", "transfer", "document", "attachment",
+            "dropbox", "onedrive", "icloud",
         ],
         "background": [
             "update", "background", "sync", "backup", "telemetry", "patch",

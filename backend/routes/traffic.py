@@ -39,7 +39,11 @@ def scan_traffic():
     semantic = state.get_semantic_routing()
     created = []
     for connection in connections:
-        entry = state.add_traffic(connection["type"], connection["label"])
+        # add_captured_traffic, not add_traffic: the category isn't
+        # known in advance here -- it's read off the connection's real
+        # hostname (via the same Gemini/fallback pipeline capture_service.py
+        # uses), not guessed from the port number alone.
+        entry = state.add_captured_traffic(connection["label"])
         metrics = routing_service.compute_metrics(entry["priority"], congestion, semantic, entry["type"])
         created.append({**entry, **metrics})
 

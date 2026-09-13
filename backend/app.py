@@ -3,6 +3,7 @@
 Run locally with: python app.py
 """
 import logging
+import os
 from pathlib import Path
 
 from flask import Flask, jsonify, request, send_from_directory
@@ -17,6 +18,7 @@ from routes.enforce import enforce_bp
 from routes.health import health_bp
 from routes.simulation import simulation_bp
 from routes.traffic import traffic_bp
+from services import live_sniff_service, scan_poller
 
 
 def create_app() -> Flask:
@@ -35,6 +37,18 @@ def create_app() -> Flask:
     app.register_blueprint(demo_bp)
     app.register_blueprint(capture_bp)
     app.register_blueprint(enforce_bp)
+
+    # Werkzeug's debug reloader re-execs this whole module in a child
+    # process (WERKZEUG_RUN_MAIN=true) after running it once in the
+    # parent watcher process first -- start the poller only in the
+    # process that's actually going to serve requests, so debug mode
+    # doesn't end up with two competing scan threads. (Checking
+    # Config.DEBUG here rather than app.debug: Flask doesn't apply the
+    # debug flag to the app object until app.run(debug=...) is called,
+    # which happens after create_app() has already returned.)
+    if not Config.DEBUG or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
+        scan_poller.start()
+        live_sniff_service.start()
 
     @app.get("/")
     def get_api_info():

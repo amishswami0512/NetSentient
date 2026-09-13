@@ -524,6 +524,12 @@ you extend it, keep it that way.
 
 ## 13. Known Limitations
 
+- Live SNI sniffing only sees a hostname for connections whose TLS
+  handshake happens *after* sniffing starts — a connection already
+  established before the server started still falls back to reverse
+  DNS until it reconnects. It also only ever helps with HTTPS (port
+  443); plain HTTP and other protocols were never affected by the
+  reverse-DNS problem it fixes.
 - State persists to a real SQLite database (`Config.STATE_DB_PATH`,
   WAL mode), safe across process restarts and multiple worker
   processes sharing the file. It's still a single-file database, not a
@@ -612,3 +618,54 @@ Everything above was verified to actually run this way during
 development: gunicorn with multiple workers serving real requests, and
 the tc/iptables commands in section 9 executed against a live
 interface — not just described.
+
+## 15. Automatic Live Detection (open a site, it shows up)
+
+Beyond the manual `POST /api/traffic/scan` (section 6), the server now
+runs a background poller (`services/scan_poller.py`) that re-scans
+your machine's real live network connections every
+`SCAN_POLL_INTERVAL_SECONDS` (default 5s) and automatically adds any
+genuinely new one as traffic — open YouTube, and within a few seconds
+a new flow appears without calling any endpoint yourself. Dedup is
+exact-label match against currently active traffic, so an ongoing
+connection doesn't get re-added every tick. On by default
+(`SCAN_POLL_ENABLED=true`) since it only reads local connection info,
+never touches the network.
+
+**The hostname problem, and how it's solved.** Reverse DNS (the
+original approach) is unreliable for exactly the sites worth naming
+correctly — verified directly, not assumed:
+
+```
+youtube.com     -> reverse-resolves to: ia-in-f91.1e100.net
+googlevideo.com -> reverse-resolves to: yucbfrl-in-f99.1e100.net
+```
+
+Google-hosted services (YouTube, Gmail, Search, Drive) all sit behind
+generic infrastructure hostnames like that, so a connection would show
+up as `"...connection to ia-in-f91.1e100.net..."` with no signal
+anywhere for Gemini or the fallback classifier to work with.
+
+`services/live_sniff_service.py` fixes this by reading the real
+hostname straight out of the TLS handshake's SNI field — the same
+unencrypted field `capture_service.py`'s pcap analysis already reads,
+just watched live on a real interface instead of parsed from a
+recorded file. When available, it takes priority over reverse DNS in
+`network_scan_service.py`. It's **off by default**
+(`SNI_SNIFF_ENABLED=false`): unlike the connection poller, this needs
+raw packet access — the same privilege level `tcpdump` needs (`sudo`
+on Mac/Linux). Enable it with:
+
+```bash
+sudo SNI_SNIFF_ENABLED=true python3 app.py
+```
+
+Without it, or if it's enabled but scapy isn't installed, or the
+process isn't running with the needed privileges: everything still
+works exactly as before this existed, just back to reverse-DNS
+hostnames. Nothing crashes either way.
+
+Both background threads guard against Flask's debug-mode reloader
+running application setup twice (`WERKZEUG_RUN_MAIN` check in
+`app.py`) — otherwise `FLASK_DEBUG=true` (the default) would start two
+competing pollers/sniffers per process.
