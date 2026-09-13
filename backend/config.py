@@ -158,55 +158,22 @@ class Config:
     # outright, regardless of how valid the API key is.
     GEMINI_TIMEOUT_SECONDS = float(os.environ.get("GEMINI_TIMEOUT_SECONDS", "12.0"))
 
-    # Where active traffic / congestion / routing state is persisted
-    # (see services/state_service.py) -- a real SQLite database (WAL
-    # mode), not a JSON snapshot, so it's transactional and safe to
-    # share across multiple worker processes (e.g. gunicorn). Defaults
-    # to a path next to this file so it resolves correctly regardless
-    # of the process's current working directory.
-    #
-    # Uses `or` rather than os.environ.get(key, default): .env.example
-    # ships this key present but blank (meaning "use the default"), and
-    # os.environ.get's default only kicks in when the key is *absent* --
-    # a present-but-empty value would otherwise resolve to "", the same
-    # class of bug GEMINI_TIMEOUT_SECONDS hit earlier.
-    STATE_DB_PATH = os.environ.get("STATE_DB_PATH") or os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "data", "state.db"
+    # Real local network measurement. The download is deliberately small and
+    # cached so it does not run on every dashboard refresh.
+    SPEED_TEST_URL = os.environ.get(
+        "SPEED_TEST_URL",
+        "https://speed.cloudflare.com/__down?bytes=2000000",
     )
-
-    # Directory POST /api/capture/analyze is allowed to read pcap files
-    # from (services/capture_service.py). Requests may only reference
-    # files inside this directory -- see routes/capture.py's path
-    # resolution -- so a client can never read arbitrary files off disk
-    # via a crafted pcap_path.
-    CAPTURES_DIR = os.environ.get("CAPTURES_DIR") or os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "data", "captures"
+    SPEED_TEST_TIMEOUT_SECONDS = float(
+        os.environ.get("SPEED_TEST_TIMEOUT_SECONDS", "5.0")
     )
-    # Cap on how many distinct flows a single capture analysis returns
-    # (ranked by packet count) -- keeps a huge pcap from turning one
-    # request into thousands of Gemini calls / traffic entries.
-    CAPTURE_MAX_FLOWS = int(os.environ.get("CAPTURE_MAX_FLOWS", "25"))
-
-    # Real traffic shaping (services/enforcement_service.py). False by
-    # default: every /api/enforce/* call is a dry run (returns the
-    # tc/iptables commands without running them) until this is
-    # explicitly turned on. This is a real safety default, not just a
-    # dev convenience -- enabling it reconfigures a live network
-    # interface, so it should never happen from a config file default.
-    ENFORCEMENT_ENABLED = os.environ.get("ENFORCEMENT_ENABLED", "false").lower() == "true"
-    # Interface enforcement rules apply to. Defaults to loopback, which
-    # never carries real external traffic -- safe to leave enabled
-    # against by accident. Point this at a real interface (e.g. eth0)
-    # only once you mean to shape real traffic on it.
-    ENFORCEMENT_INTERFACE = os.environ.get("ENFORCEMENT_INTERFACE") or "lo"
-    # Total bandwidth budget (Mbps) the priority tiers divide up.
-    ENFORCEMENT_BANDWIDTH_MBPS = float(os.environ.get("ENFORCEMENT_BANDWIDTH_MBPS", "10"))
-
-    # Comma-separated API keys accepted as `Authorization: Bearer <key>`
-    # on every /api/* route except /api/health. Empty (default) means
-    # no auth is required -- backward compatible with every earlier
-    # section of this README, and appropriate for local development.
-    # Set this before exposing the API beyond localhost.
-    API_KEYS = frozenset(
-        key.strip() for key in os.environ.get("API_KEYS", "").split(",") if key.strip()
+    SPEED_TEST_MAX_BYTES = int(os.environ.get("SPEED_TEST_MAX_BYTES", "2000000"))
+    SPEED_TEST_CACHE_SECONDS = float(
+        os.environ.get("SPEED_TEST_CACHE_SECONDS", "30.0")
+    )
+    SPEED_TEST_FALLBACK_BANDWIDTH_MBPS = float(
+        os.environ.get("SPEED_TEST_FALLBACK_BANDWIDTH_MBPS", "10.0")
+    )
+    SPEED_TEST_FALLBACK_LATENCY_MS = float(
+        os.environ.get("SPEED_TEST_FALLBACK_LATENCY_MS", "20.0")
     )

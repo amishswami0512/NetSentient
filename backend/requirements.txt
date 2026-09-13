@@ -11,14 +11,4 @@ pytest>=8.0,<9.0
 # semantic factors (config.FALLBACK_SEMANTIC_FACTORS).
 google-genai>=2.0,<3.0
 pydantic>=2.0,<3.0
-
-# Optional: only needed for POST /api/capture/analyze (real pcap
-# ingestion, services/capture_service.py). The app runs fine without
-# it -- that one endpoint returns a clear 501 CAPTURE_UNAVAILABLE
-# instead of crashing anything else.
-scapy>=2.5,<3.0
-
-# Production WSGI server (see Dockerfile). Flask's own dev server
-# (`python app.py`) is single-threaded and not meant to be exposed
-# beyond localhost.
-gunicorn>=21.0,<22.0
+psutil>=6.0,<7.0

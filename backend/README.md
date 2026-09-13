@@ -127,8 +127,6 @@ All optional — see `.env.example`. Copy it to `.env` to override defaults.
 | `GEMINI_API_KEY` | *(empty)* | Optional. If set, `POST /api/classify` and traffic creation use real Gemini semantic analysis. If unset, the deterministic fallback is used and the app works identically otherwise. |
 | `GEMINI_MODEL` | `gemini-3.5-flash-lite` | Gemini model used for semantic analysis (fast/cheap, appropriate for structured classification) |
 | `GEMINI_TIMEOUT_SECONDS` | `12.0` | Hard cap on a single Gemini call before falling back. Must be >= 10 -- the Gemini API server rejects a shorter deadline outright regardless of API key validity |
-| `API_KEYS` | *(empty)* | Comma-separated. If set, every `/api/*` route except `/api/health` requires `Authorization: Bearer <key>`. Unset means no auth. See section 14 |
-| `ENFORCEMENT_ENABLED` | `false` | If true, `POST /api/enforce/apply` actually runs tc/iptables commands instead of a dry run. See section 9 |
 
 **CORS note:** `ALLOWED_ORIGINS` is never `*`. If your dashboard runs on
 a different port, add it to this list (comma-separated) in your `.env`.
@@ -146,9 +144,10 @@ All responses are JSON. All errors follow this shape:
 | Method | Endpoint | Purpose | Request Body | Success Response |
 |---|---|---|---|---|
 | GET | `/api/health` | Liveness check | — | `{"status":"ok","service":"semantic-router-api","version":"1.0.0"}` |
-| GET | `/api/network/status` | Current simulated network state | — | `{"congestion":bool,"load_percent":int,"bandwidth_mbps":float,"semantic_routing_enabled":bool,"active_connections":int,"timestamp":str}` |
+| GET | `/api/network/status` | Simulated routing state plus a cached real local bandwidth/HTTP-latency measurement | — | Includes `bandwidth_mbps`, `latency_ms`, `measurement_ok`, and `measurement_source` |
 | GET | `/api/traffic` | List active traffic with live metrics | — | `{"traffic":[{...}]}` |
 | POST | `/api/traffic` | Create a traffic flow | `{"type":"emergency","label":"optional"}` | `201` created traffic item incl. metrics |
+| POST | `/api/traffic/scan` | Scan established local internet connections with psutil and add them as traffic entries | — | `{"traffic":[...],"count":int,"scanned_at":str}` |
 | POST | `/api/classify` | Semantic analysis + priority for free-text input | `{"input":"some text"}` | `{"category":str,"confidence":float,"priority":float,"priority_factors":{...},"low_confidence":bool,"source":"gemini"\|"keyword"\|"fallback","reason":str}` |
 | POST | `/api/simulation/congestion` | Toggle congestion | `{"enabled":bool}` | `{"congestion":bool,"load_percent":int,"bandwidth_mbps":float}` |
 | POST | `/api/simulation/semantic-routing` | Toggle semantic routing | `{"enabled":bool}` | `{"semantic_routing_enabled":bool}` |
@@ -157,10 +156,6 @@ All responses are JSON. All errors follow this shape:
 | POST | `/api/demo/reset` | Seed the standard demo scenario | — | `{"traffic":[...],"network":{...}}` |
 | POST | `/api/demo/congest` | Enable congestion + run simulation | — | `{"simulation_id":str,"network":{...},"results":[...]}` |
 | POST | `/api/demo/compare` | Baseline vs. semantic routing comparison | — | `{"baseline":[...],"semantic":[...],"improvement":[...]}` |
-| POST | `/api/capture/analyze` | Classify real traffic from a `.pcap` file | `{"pcap_path":"sample.pcap"}` | `{"flows_processed":int,"traffic":[{...,"flow_metadata":{...}}]}` |
-| POST | `/api/enforce/apply` | Apply a priority to a real flow pattern via tc/iptables | `{"protocol":"tcp","port":443,"priority":8.7,"dst_cidr":"optional"}` | `{"tier":str,"fwmark":int,"dry_run":bool,"commands":[...],"applied":bool,"errors":[...]}` |
-| GET | `/api/enforce/status` | Current tc/iptables enforcement state | — | `{"enabled":bool,"interface":str,"bandwidth_mbps":float,"tiers":[...],"qdisc":str\|null,"classes":str\|null,"mangle_rules":str\|null}` |
-| POST | `/api/enforce/reset` | Tear down all enforcement rules | — | `{"interface":str,"dry_run":bool,"commands":[...],"applied":bool,"errors":[...]}` |
 
 Traffic `type` must be one of: `emergency`, `critical_sensor`, `real_time`,
 `video`, `file`, `background`. Any other value returns `400 INVALID_REQUEST`.
@@ -338,137 +333,7 @@ judges. `services/routing_service.py` only ever consumes the final
 `priority` number — it never calls Gemini and doesn't know semantic
 analysis exists.
 
-## 8. Real Traffic Ingestion (`POST /api/capture/analyze`)
-
-Every other endpoint takes a hand-typed description. This one takes
-**actual network traffic** you captured yourself and runs it through
-the exact same `semantic_service` / `priority_service` pipeline — no
-separate scoring logic, no toy data.
-
-**How to try it with real traffic:**
-
-```bash
-# 1. Capture some real traffic on your own machine (needs sudo):
-sudo tcpdump -i any -w sample.pcap -c 200
-
-# 2. Drop it where the backend is allowed to read from:
-mkdir -p backend/data/captures
-cp sample.pcap backend/data/captures/
-
-# 3. Analyze it:
-curl -X POST http://localhost:5000/api/capture/analyze \
-  -H "Content-Type: application/json" \
-  -d '{"pcap_path": "sample.pcap"}'
-```
-
-What it does, in order (`services/capture_service.py`):
-1. Reads the pcap with `scapy`, groups packets into flows by 5-tuple
-   (both directions of a connection collapse to one flow).
-2. Per flow, extracts what's actually observable: a TLS SNI hostname
-   (parsed directly from the ClientHello's plaintext extension — no
-   decryption involved, that field is never encrypted), a DNS query
-   name, or falls back to protocol/port with a well-known-service
-   name (`443` → "HTTPS/TLS", `53` → "DNS", etc.).
-3. Turns that into a factual description, e.g. `"Encrypted TLS session
-   to 'meet.google.com' on port 443, 340 packets / 210000 bytes over
-   12.4s"` — never a guess at category or importance, just what was
-   observed.
-4. Feeds that description into `semantic_service.analyze()` — the
-   identical function `/api/classify` uses — so real captured traffic
-   is judged by the same Gemini/keyword/fallback rules as typed input.
-5. Adds each flow as a real traffic entry (`state.add_captured_traffic`)
-   so it shows up in `/api/traffic` and the dashboard like anything else.
-
-**Constraints, on purpose:**
-- `pcap_path` is resolved against `Config.CAPTURES_DIR`
-  (`backend/data/captures/` by default) and rejected if it would
-  escape that directory — this endpoint reads a file by client-supplied
-  name, so path traversal is the obvious attack surface and is blocked
-  at the route layer (`routes/capture.py::_resolve_capture_path`).
-- Only the top `CAPTURE_MAX_FLOWS` flows by packet count are processed
-  (default 25) — a huge pcap shouldn't turn one request into thousands
-  of Gemini calls.
-- `scapy` is an optional dependency, same pattern as `google-genai`:
-  not installed → this one endpoint returns `501 CAPTURE_UNAVAILABLE`
-  with a clear message, nothing else in the app is affected.
-- Captured traffic can contain real hostnames/IPs from your own
-  network — `backend/data/` (captures included) is gitignored, never
-  commit a real `.pcap` file.
-
-## 9. Real Enforcement (`POST /api/enforce/apply`)
-
-Section 8 classifies real traffic. This is the other half: actually
-shaping real bandwidth by priority, via `tc` (HTB queueing) and
-`iptables` (fwmark packet marking) -- `services/enforcement_service.py`.
-
-**Safe by default.** `Config.ENFORCEMENT_ENABLED` is `false` unless you
-explicitly set it, and `Config.ENFORCEMENT_INTERFACE` defaults to `lo`
-(loopback, never carries real traffic). Out of the box, every call
-here is a **dry run**: it returns the exact `tc`/`iptables` commands it
-would run without executing anything. This isn't a demo simplification
--- it's a real safety default, because enabling this reconfigures an
-actual network interface, and that should never happen just because a
-repo was cloned and `.env` copied without reading it.
-
-```bash
-curl -X POST http://localhost:5000/api/enforce/apply \
-  -H "Content-Type: application/json" \
-  -d '{"protocol": "tcp", "port": 443, "priority": 8.7}'
-# -> {"tier":"critical","fwmark":10,"dry_run":true,"commands":[...],"applied":false,"errors":[]}
-```
-
-**How priority maps to bandwidth**, 4 fixed tiers off one bandwidth
-budget (`ENFORCEMENT_BANDWIDTH_MBPS`), each with a guaranteed floor
-(`rate`) and a max it may borrow when others are idle (`ceil`, HTB's
-standard model):
-
-| Priority | Tier | fwmark | Guaranteed | Max (borrowed) |
-|---|---|---|---|---|
-| ≥ 7.5 | critical | 10 | 50% | 90% |
-| ≥ 5.0 | high | 20 | 25% | 60% |
-| ≥ 2.0 | normal | 30 | 15% | 40% |
-| < 2.0 | low | 40 | 5% | 15% |
-
-**To actually shape real traffic** (verified working on a live
-interface during development -- root + `NET_ADMIN` required):
-
-```bash
-export ENFORCEMENT_ENABLED=true
-export ENFORCEMENT_INTERFACE=eth0   # your real interface -- NOT lo
-python app.py
-```
-
-What happens on the first real `apply` call, in order:
-1. **Base topology, once per process** (`tc qdisc replace ... htb` +
-   one `tc class` per tier + one `tc filter` per tier). Uses the `u32`
-   classifier matching on fwmark, not the more commonly-documented
-   `fw` classifier -- `cls_fw` needs a kernel module that isn't present
-   on every kernel (confirmed missing on at least one real deployment
-   target), while `u32` is effectively universal on Linux.
-2. **Per-flow mark rule** (`iptables -t mangle`, in a dedicated
-   `NETSENTIENT_MARK` chain jumped to from `OUTPUT` -- never rules
-   inserted directly into `OUTPUT`, so this never disturbs any
-   pre-existing rules on a real box). Idempotent via an `iptables -C`
-   check before every `-A`, so repeated calls (or a process restart)
-   never pile up duplicate rules.
-
-Subsequent calls only add their own mark rule -- the base topology is
-skipped once already applied (`tc qdisc replace` on the root qdisc
-would otherwise destroy and recreate the whole tree, including every
-other tier's filter, on every single call).
-
-`GET /api/enforce/status` shows the live `tc`/`iptables` state
-(`tc -s qdisc/class show`, `iptables -t mangle -L`) for a demo.
-`POST /api/enforce/reset` deletes the qdisc and flushes the mark chain
--- also a dry run unless `ENFORCEMENT_ENABLED=true`.
-
-**Not yet wired up:** nothing currently calls `/api/enforce/apply`
-automatically when `/api/capture/analyze` classifies a flow -- they're
-separate endpoints today. Chaining them (auto-enforce every captured
-flow's computed priority) is the natural next step once you're ready
-to point this at a real interface.
-
-## 10. Demo Workflow
+## 8. Demo Workflow
 
 For a live demo, this sequence tells a complete story:
 
@@ -479,7 +344,7 @@ curl -X POST http://localhost:5000/api/demo/congest    # trigger congestion, sho
 curl -X POST http://localhost:5000/api/simulation/reset  # back to clean state if you want to re-run
 ```
 
-## 11. Testing
+## 9. Testing
 
 ```bash
 cd backend
@@ -491,7 +356,7 @@ All tests use Flask's test client and reset in-memory state before and
 after each test (`tests/conftest.py`), so they don't depend on the
 server being started separately and don't leak state between runs.
 
-## 12. How Teammates Should Integrate
+## 10. How Teammates Should Integrate
 
 **Frontend (dashboard):** point your HTTP client at `http://localhost:5000`,
 allow-list your dev server's origin in `ALLOWED_ORIGINS`, and build
@@ -522,34 +387,14 @@ knowledge that semantic analysis exists. The simulation is intentionally
 deterministic (no `random` calls) so a live demo is reproducible — if
 you extend it, keep it that way.
 
-## 13. Known Limitations
+## 11. Known Limitations
 
-- State persists to a real SQLite database (`Config.STATE_DB_PATH`,
-  WAL mode), safe across process restarts and multiple worker
-  processes sharing the file. It's still a single-file database, not a
-  networked multi-writer one like Postgres — appropriate at the scale
-  this app runs at, not infinitely scalable. Use
-  `POST /api/simulation/reset` or `POST /api/demo/reset` for an
-  explicit clean slate.
-- `Config.API_KEYS` gates every `/api/*` route except `/api/health`,
-  but it's a single shared secret per key, not per-user auth/RBAC —
-  fine for gating access to the API as a whole, not for multi-tenant
-  access control.
-- Gunicorn's worker-process model (see `Dockerfile`) means each worker
-  has its own in-memory Gemini result cache (`services/semantic_service.py`'s
-  `PayloadCache`) — the same classification can still be a genuine
-  Gemini call in each of N workers before all of them have it cached,
-  since the cache isn't shared across processes. A shared cache (e.g.
-  Redis) would fix this but adds an external service dependency this
-  project doesn't otherwise need; worth it at real production traffic
-  volume, not implemented here.
-- `POST /api/capture/analyze` and `POST /api/enforce/apply` exist
-  side by side but aren't chained — classifying a captured flow
-  doesn't automatically enforce it. See sections 8 and 9.
-- Enforcement (`services/enforcement_service.py`) uses 4 fixed
-  bandwidth tiers keyed off fwmark, not per-flow fairness within a
-  tier — two `critical` flows share that tier's guaranteed rate rather
-  than each getting their own guarantee.
+- State is in-memory and per-process: restarting Flask wipes all
+  traffic/congestion/routing state. Use `POST /api/simulation/reset` or
+  `POST /api/demo/reset` instead of restarting when you just need a
+  clean slate.
+- Single-process, no persistence, no auth — by design, for a 36-hour
+  hackathon demo, not production use.
 - The deterministic fallback (used with no `GEMINI_API_KEY`, or when
   Gemini fails) can only estimate *typical* semantic factors for the
   category it detects via keyword matching — it genuinely cannot
@@ -572,43 +417,13 @@ you extend it, keep it that way.
   underlying situation could, in principle, get a slightly different
   score from Gemini on different runs.
 
-## 14. Production Deployment
 
-**Auth.** Set `API_KEYS` (comma-separated) in `.env` and every
-`/api/*` route except `/api/health` requires
-`Authorization: Bearer <key>`. Unset (default) means no auth, same as
-every earlier section of this README — set it before exposing the API
-beyond localhost.
+### Real network measurements
 
-```bash
-curl -X POST http://localhost:5000/api/classify \
-  -H "Authorization: Bearer $YOUR_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"input": "Ambulance emergency alert dispatched"}'
-```
+`GET /api/network/status` now measures a small public download from the machine running Flask and caches the result for 30 seconds. The simulated congestion/load model is intentionally unchanged; only bandwidth and HTTP latency are real local measurements. If the measurement fails, the server returns the configured safe fallback (`10.0 Mbps`, `20 ms`) and marks `measurement_ok` as `false`.
 
-**Running it for real**, instead of `python app.py` (Flask's dev
-server, single-threaded, not meant to be exposed beyond localhost):
+### Local traffic scan
 
-```bash
-# Directly with gunicorn:
-pip install -r requirements.txt
-FLASK_DEBUG=false gunicorn --bind 0.0.0.0:5000 --workers 4 --timeout 30 app:app
+`POST /api/traffic/scan` uses `psutil.net_connections(kind="inet")` to find established remote connections, resolves remote hostnames where possible, records the owning process/PID, and adds the connections to the same priority/routing pipeline. The traffic tier is inferred conservatively from process/hostname/port hints; the scanner does not claim to know application semantics from a socket alone.
 
-# Or with Docker:
-docker compose up --build
-```
-
-The `Dockerfile`/`docker-compose.yml` mount `./data` as a volume, so
-the SQLite state database and any pcap captures survive a container
-restart. Real enforcement (`ENFORCEMENT_ENABLED=true` against a real
-interface) needs the container to see and modify a real host
-interface — `docker-compose.yml` has `network_mode: host` +
-`cap_add: NET_ADMIN` commented out for exactly that case; it's off by
-default because granting NET_ADMIN is a real capability grant, not
-something a compose file should hand out silently.
-
-Everything above was verified to actually run this way during
-development: gunicorn with multiple workers serving real requests, and
-the tc/iptables commands in section 9 executed against a live
-interface — not just described.
+The scan requires `psutil` and may return fewer connections (or unknown process names) on machines where OS permissions restrict connection/process inspection.

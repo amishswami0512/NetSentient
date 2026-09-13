@@ -4,15 +4,13 @@ Run locally with: python app.py
 """
 import logging
 
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify
 from flask_cors import CORS
 
 from config import Config
 from models.schemas import APIError
-from routes.capture import capture_bp
 from routes.classify import classify_bp
 from routes.demo import demo_bp
-from routes.enforce import enforce_bp
 from routes.health import health_bp
 from routes.simulation import simulation_bp
 from routes.traffic import traffic_bp
@@ -24,33 +22,13 @@ def create_app() -> Flask:
 
     logging.basicConfig(level=logging.INFO)
 
-    CORS(app, origins=Config.ALLOWED_ORIGINS)
+    CORS(app, origins="*")
 
     app.register_blueprint(health_bp)
     app.register_blueprint(traffic_bp)
     app.register_blueprint(classify_bp)
     app.register_blueprint(simulation_bp)
     app.register_blueprint(demo_bp)
-    app.register_blueprint(capture_bp)
-    app.register_blueprint(enforce_bp)
-
-    @app.before_request
-    def _require_api_key():
-        # No keys configured -- auth is off, same behavior as every
-        # earlier version of this app. /api/health stays open even
-        # with auth on, since it's the liveness probe a load balancer
-        # or orchestrator hits before anything else is ready to
-        # authenticate.
-        if not Config.API_KEYS or request.path == "/api/health":
-            return None
-        if not request.path.startswith("/api/"):
-            return None
-
-        auth_header = request.headers.get("Authorization", "")
-        token = auth_header[len("Bearer "):].strip() if auth_header.startswith("Bearer ") else ""
-        if token not in Config.API_KEYS:
-            raise APIError("UNAUTHORIZED", "Missing or invalid API key.", 401)
-        return None
 
     @app.errorhandler(APIError)
     def handle_api_error(err: APIError):

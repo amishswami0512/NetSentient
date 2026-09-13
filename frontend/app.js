@@ -65,7 +65,8 @@ function updateToggles() {
 
 function updateNetwork(status) {
   $('loadValue').textContent = `${number(status.load_percent)}%`;
-  $('bandwidthValue').textContent = `${number(status.bandwidth_mbps)} Mbps available`;
+  $('bandwidthValue').textContent = `${number(status.bandwidth_mbps)} Mbps measured${status.measurement_ok ? '' : ' (fallback)'}`;
+  $('latencyValue').textContent = `${number(status.latency_ms)} ms HTTP latency`;
   $('loadMeter').style.width = `${Math.min(100, number(status.load_percent))}%`;
   $('flowsValue').textContent = number(status.active_connections);
 }
@@ -148,6 +149,14 @@ async function setSemantic() {
   try { const response = await request('/simulation/semantic-routing', { method: 'POST', body: JSON.stringify({ enabled: !semantic }) }); semantic = response.semantic_routing_enabled; updateToggles(); logEvent(`Semantic routing ${semantic ? 'enabled' : 'disabled'}`, 'routing'); await refresh(); }
   catch (error) { logEvent(error.message, 'error'); }
 }
+async function scanTraffic() {
+  try {
+    $('scanBtn').disabled = true;
+    const data = await request('/traffic/scan', { method: 'POST' });
+    logEvent(`Scanned ${data.count} active local connections`, 'network');
+    await refresh();
+  } catch (error) { logEvent(error.message, 'error'); } finally { $('scanBtn').disabled = false; }
+}
 async function seedDemo() {
   try { $('seedBtn').disabled = true; const data = await request('/demo/reset', { method: 'POST' }); logEvent(`Loaded ${data.traffic.length} demo flows`, 'demo'); await refresh(); }
   catch (error) { logEvent(error.message, 'error'); } finally { $('seedBtn').disabled = false; }
@@ -188,7 +197,7 @@ function renderComparison(data) {
 }
 async function compare() { try { renderComparison(await request('/demo/compare', { method: 'POST' })); logEvent('Routing comparison complete', 'analysis'); } catch (error) { logEvent(error.message, 'error'); } }
 
-$('congestionToggle').addEventListener('click', setCongestion); $('semanticToggle').addEventListener('click', setSemantic); $('seedBtn').addEventListener('click', seedDemo); $('demoBtn').addEventListener('click', runDemo); $('resetBtn').addEventListener('click', reset); $('classifyBtn').addEventListener('click', classify); $('compareBtn').addEventListener('click', compare);
+$('congestionToggle').addEventListener('click', setCongestion); $('scanBtn').addEventListener('click', scanTraffic); $('semanticToggle').addEventListener('click', setSemantic); $('seedBtn').addEventListener('click', seedDemo); $('demoBtn').addEventListener('click', runDemo); $('resetBtn').addEventListener('click', reset); $('classifyBtn').addEventListener('click', classify); $('compareBtn').addEventListener('click', compare);
 document.querySelectorAll('.quick-picks button').forEach((button) => button.addEventListener('click', () => { $('payloadInput').value = button.dataset.payload; $('payloadInput').focus(); }));
 $('payloadInput').addEventListener('keydown', (event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') classify(); });
 initCharts(); logEvent('Dashboard initialized; loading demo traffic', 'system'); seedDemo(); setInterval(refresh, 2500);

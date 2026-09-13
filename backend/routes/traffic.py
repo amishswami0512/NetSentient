@@ -1,8 +1,11 @@
+from datetime import datetime, timezone
+
 from flask import Blueprint, jsonify, request
 
 from config import DEFAULT_LABELS
 from models.schemas import optional_string_field, parse_json_body, require_traffic_type
 from services import routing_service, simulation_service
+from services.traffic_scanner_service import scan_active_connections
 from services.state_service import state
 
 traffic_bp = Blueprint("traffic", __name__)
@@ -30,3 +33,13 @@ def create_traffic():
     metrics = routing_service.compute_metrics(entry["priority"], congestion, semantic)
 
     return jsonify({**entry, **metrics}), 201
+
+
+@traffic_bp.route("/api/traffic/scan", methods=["POST"])
+def scan_traffic():
+    scanned = scan_active_connections()
+    return jsonify({
+        "traffic": simulation_service.traffic_with_metrics_for_entries(scanned),
+        "count": len(scanned),
+        "scanned_at": datetime.now(timezone.utc).isoformat(),
+    }), 200

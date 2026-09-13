@@ -24,10 +24,15 @@ DEMO_SCENARIOS: list[tuple[str, str]] = [
 
 def traffic_with_metrics() -> list[dict[str, Any]]:
     """Current active traffic, annotated with live metrics."""
+    return traffic_with_metrics_for_entries(state.get_traffic_list())
+
+
+def traffic_with_metrics_for_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Annotate an arbitrary set of traffic entries with current metrics."""
     congestion = state.get_congestion()
     semantic = state.get_semantic_routing()
     items = []
-    for t in state.get_traffic_list():
+    for t in entries:
         metrics = routing_service.compute_metrics(t["priority"], congestion, semantic)
         items.append({**t, **metrics})
     return items

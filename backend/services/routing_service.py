@@ -11,6 +11,7 @@ from typing import Any
 
 from config import MAX_PRIORITY
 from services.state_service import state
+from services.network_measurement_service import get_network_measurement
 
 # (priority, delivery_percent) anchor points used to interpolate delivery
 # for congested traffic *with* semantic routing enabled. Priority 10
@@ -26,8 +27,6 @@ _SEMANTIC_CONGESTED_ANCHORS: list[tuple[int, float]] = [
 
 _NO_CONGESTION_LOAD_PERCENT = 30
 _CONGESTION_LOAD_PERCENT = 82
-_NO_CONGESTION_BANDWIDTH_MBPS = 10.0
-_CONGESTION_BANDWIDTH_MBPS = 2.0
 
 
 def _interpolate_delivery(priority: float) -> float:
@@ -83,14 +82,18 @@ def compute_metrics(
 
 def get_network_status() -> dict[str, Any]:
     congestion = state.get_congestion()
+    measurement = get_network_measurement()
     return {
         "congestion": congestion,
+        # Load remains a controlled simulation input; bandwidth/latency are
+        # measured from the machine running Flask.
         "load_percent": _CONGESTION_LOAD_PERCENT
         if congestion
         else _NO_CONGESTION_LOAD_PERCENT,
-        "bandwidth_mbps": _CONGESTION_BANDWIDTH_MBPS
-        if congestion
-        else _NO_CONGESTION_BANDWIDTH_MBPS,
+        "bandwidth_mbps": measurement["bandwidth_mbps"],
+        "latency_ms": measurement["latency_ms"],
+        "measurement_ok": measurement["measurement_ok"],
+        "measurement_source": measurement["measurement_source"],
         "semantic_routing_enabled": state.get_semantic_routing(),
         "active_connections": len(state.get_traffic_list()),
         "timestamp": datetime.now(timezone.utc).isoformat(),
